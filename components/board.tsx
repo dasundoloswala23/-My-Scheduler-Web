@@ -1,0 +1,291 @@
+"use client";
+
+import {
+  closestCorners,
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { ListFilter, MoreHorizontal, Plus } from "lucide-react";
+import { useMemo, useState } from "react";
+
+import { useAuth } from "@/lib/auth-context";
+import { useCategories, useLists, useTasks, tasksForList } from "@/lib/hooks";
+import { needsRebalance, positionBetween, rebalanced } from "@/lib/position";
+import { addList, appendPosition, deleteList, moveTask, renameList } from "@/lib/repo";
+import { argbToCss, type Task, type TaskList } from "@/lib/types";
+import { useMove } from "@/lib/use-move";
+
+import { QuickAddDialog } from "./quick-add-dialog";
+import { SortableTaskCard, TaskCardBody } from "./task-card";
+import { TaskDetailDialog } from "./task-detail-dialog";
+import { TaskMenu } from "./task-menu";
+
+export function Board({ boardId }: { boardId: string }) {
+  const { user } = useAuth();
+  const allTasks = useTasks();
+  const lists = useLists().filter((l) => l.boardId === boardId);
+  const categories = useCategories();
+  const move = useMove();
+
+  const [activeTask, setActiveTask] = useState<Task | null>(null);
+  const [filterCategory, setFilterCategory] = useState("");
+  const [openTask, setOpenTask] = useState<Task | null>(null);
+  const [menuTask, setMenuTask] = useState<Task | null>(null);
+  const [addTo, setAddTo] = useState<TaskList | null>(null);
+
+  // Filtering only hides cards; the stored data is untouched.
+  const tasks = useMemo(
+    () => (filterCategory ? allTasks.filter((t) => t.categoryId === filterCategory) : allTasks),
+    [allTasks, filterCategory],
+  );
+
+  const sensors = useSensors(
+    // A small distance means a click still selects, but a drag starts quickly.
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    // Touch needs a short hold so the board can still be scrolled with a finger.
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  function onDragStart(event: DragStartEvent) {
+    setActiveTask((event.active.data.current?.task as Task) ?? null);
+  }
+
+  async function onDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    setActiveTask(null);
+    if (!over || !user) return;
+
+    const task = active.data.current?.task as Task | undefined;
+    if (!task) return;
+
+    // Work out which list was dropped on, and at which slot.
+    const overData = over.data.current as { type?: string; task?: Task; listId?: string } | undefined;
+    const targetListId =
+      overData?.type === "task" ? overData.task!.listId : (overData?.listId ?? null);
+    if (!targetListId) return;
+
+    const siblings = tasksForList(tasks, targetListId).filter((t) => t.id !== task.id);
+    let index = siblings.length;
+    if (overData?.type === "task") {
+      const overIndex = siblings.findIndex((t) => t.id === overData.task!.id);
+      if (overIndex >= 0) {
+        // Dropping on the upper half of a card inserts before it.
+        index = overIndex;
+      }
+    }
+
+    const prev = index > 0 ? siblings[index - 1].position : null;
+    const next = index < siblings.length ? siblings[index].position : null;
+
+    // Renumber the list if two neighbours got too close to split again.
+    if (needsRebalance(prev, next)) {
+      const positions = rebalanced(siblings.length);
+      await Promise.all(
+        siblings.map((t, i) => moveTask(user.uid, t.id, { position: positions[i] })),
+      );
+      return;
+    }
+
+    const changedList = task.listId !== targetListId;
+    if (!changedList && index === tasksForList(tasks, targetListId).findIndex((t) => t.id === task.id)) {
+      return; // dropped back where it started
+    }
+
+    const listName = lists.find((l) => l.id === targetListId)?.name ?? "list";
+    await move(
+      task,
+      { position: positionBetween(prev, next), listId: targetListId, boardId },
+      changedList ? `Task moved to ${listName}` : "Task reordered",
+      changedList,
+    );
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-3 px-5 pb-3 pt-1">
+        <div className="flex items-center gap-2 text-sm">
+          <ListFilter className="h-4 w-4 text-muted" />
+          <select
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+            className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-[13px] font-semibold outline-none"
+          >
+            <option value="">All categories</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!user) return;
+            const name = window.prompt("List name");
+            if (!name?.trim()) return;
+            await addList(user.uid, {
+              boardId,
+              name: name.trim(),
+              position: appendPosition(lists),
+              colorValue: 0xff9ca3af,
+              isSystem: false,
+            });
+          }}
+          className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[13px] font-semibold hover:border-primary"
+        >
+          <Plus className="h-4 w-4" /> Add list
+        </button>
+      </div>
+
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onDragCancel={() => setActiveTask(null)}
+        accessibility={{
+          announcements: {
+            onDragStart: ({ active }) => `Picked up task ${active.id}`,
+            onDragOver: () => "Moving task",
+            onDragEnd: () => "Task dropped",
+            onDragCancel: () => "Move cancelled, the task returned to its place",
+          },
+        }}
+      >
+        <div className="flex h-full gap-3.5 overflow-x-auto px-5 pb-6">
+          {lists.map((list) => (
+            <Column
+              key={list.id}
+              list={list}
+              tasks={tasksForList(tasks, list.id)}
+              onOpenTask={setOpenTask}
+              onMenuTask={setMenuTask}
+              onAdd={() => setAddTo(list)}
+            />
+          ))}
+        </div>
+
+        <DragOverlay dropAnimation={{ duration: 180, easing: "cubic-bezier(.2,.8,.4,1)" }}>
+          {activeTask && (
+            <div className="w-[310px] rotate-1 shadow-2xl">
+              <TaskCardBody task={activeTask} />
+            </div>
+          )}
+        </DragOverlay>
+      </DndContext>
+
+      {openTask && <TaskDetailDialog taskId={openTask.id} onClose={() => setOpenTask(null)} />}
+      {menuTask && <TaskMenu task={menuTask} onClose={() => setMenuTask(null)} />}
+      {addTo && (
+        <QuickAddDialog
+          open
+          onClose={() => setAddTo(null)}
+          defaultListId={addTo.id}
+          defaultBoardId={boardId}
+        />
+      )}
+    </>
+  );
+}
+
+function Column({
+  list,
+  tasks,
+  onOpenTask,
+  onMenuTask,
+  onAdd,
+}: {
+  list: TaskList;
+  tasks: Task[];
+  onOpenTask: (t: Task) => void;
+  onMenuTask: (t: Task) => void;
+  onAdd: () => void;
+}) {
+  const { user } = useAuth();
+  const { setNodeRef, isOver } = useDroppable({
+    id: `list:${list.id}`,
+    data: { type: "list", listId: list.id },
+  });
+
+  return (
+    <section className="flex w-[330px] shrink-0 flex-col rounded-[18px] bg-black/[0.035] p-2.5 dark:bg-white/[0.04]">
+      <header className="flex items-center gap-2 px-1.5 pb-2">
+        <span
+          className="h-2.5 w-2.5 rounded-full"
+          style={{ background: argbToCss(list.colorValue) }}
+        />
+        <h3 className="text-[14px] font-bold">{list.name}</h3>
+        <span className="rounded-md bg-black/[0.06] px-1.5 py-0.5 text-[11px] dark:bg-white/10">
+          {tasks.length}
+        </span>
+        <button
+          type="button"
+          aria-label="List actions"
+          className="ml-auto text-muted hover:text-ink"
+          onClick={async () => {
+            if (!user) return;
+            const action = window.prompt(
+              `List "${list.name}" — type "rename" or "delete"`,
+              "rename",
+            );
+            if (action === "rename") {
+              const name = window.prompt("New name", list.name);
+              if (name?.trim()) await renameList(user.uid, list.id, name.trim());
+            } else if (action === "delete" && !list.isSystem) {
+              await deleteList(user.uid, list.id);
+            }
+          }}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </button>
+      </header>
+
+      <div ref={setNodeRef} className="min-h-[120px] flex-1 overflow-y-auto px-0.5">
+        <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+          {tasks.map((task) => (
+            <SortableTaskCard
+              key={task.id}
+              task={task}
+              onOpen={() => onOpenTask(task)}
+              onMenu={() => onMenuTask(task)}
+            />
+          ))}
+        </SortableContext>
+
+        {/* The dashed zone from the design; also the drop target for an empty list. */}
+        <div
+          className={`mt-1.5 flex h-12 items-center justify-center rounded-xl border-[1.4px] border-dashed text-[12.5px] font-semibold transition-all ${
+            isOver
+              ? "h-16 border-2 border-primary bg-primary/10 text-primary"
+              : "border-primary/35 text-primary/70"
+          }`}
+        >
+          Drop task here
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={onAdd}
+        className="mt-2 flex items-center gap-1.5 rounded-lg px-2 py-2 text-[13px] font-semibold text-primary hover:bg-primary-soft"
+      >
+        <Plus className="h-4 w-4" /> Add task
+      </button>
+    </section>
+  );
+}
