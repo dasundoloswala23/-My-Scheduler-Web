@@ -1,10 +1,10 @@
 "use client";
 
-import { Plus, Tag, Trash2 } from "lucide-react";
+import { Pencil, Plus, Tag, Trash2 } from "lucide-react";
 
 import { useAuth } from "@/lib/auth-context";
 import { useCategories, useTasks } from "@/lib/hooks";
-import { addCategory, appendPosition, deleteCategory } from "@/lib/repo";
+import { addCategory, appendPosition, deleteCategory, renameCategory } from "@/lib/repo";
 import { argbToCss } from "@/lib/types";
 
 const PALETTE = [0xff6c5ce7, 0xff3b82f6, 0xff30a46c, 0xffe8a33d, 0xffe5484d, 0xffec4899, 0xff14b8a6, 0xff6b7280];
@@ -60,6 +60,18 @@ export default function CategoriesPage() {
               </p>
               <p className="text-[12px] text-muted">{counts[c.id] ?? 0} active tasks</p>
             </div>
+            <button
+              type="button"
+              aria-label={`Rename ${c.name}`}
+              onClick={async () => {
+                if (!user) return;
+                const name = window.prompt("Category name", c.name);
+                if (!name?.trim() || name.trim() === c.name) return;
+                await renameCategory(user.uid, c.id, name.trim());
+              }}
+            >
+              <Pencil className="h-4 w-4 text-muted hover:text-primary" />
+            </button>
             <button
               type="button"
               aria-label={`Delete ${c.name}`}

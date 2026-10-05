@@ -64,6 +64,8 @@ export function mapTask(snap: Snap): Task {
     endDateTime: toDate(d.endDateTime),
     recurrence: (d.recurrence ?? "none") as Recurrence,
     reminderMinutesBefore: d.reminderMinutesBefore ?? null,
+    reminderOffsets: (d.reminderOffsets ?? []) as number[],
+    attachmentCount: d.attachmentCount ?? 0,
     subtasks: ((d.subtasks ?? []) as Subtask[])
       .slice()
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0)),
@@ -231,8 +233,10 @@ export async function createTask(uid: string, task: NewTask): Promise<string> {
     hasSchedule: !!task.startDateTime,
     recurrence: "none",
     reminderMinutesBefore: null,
+    reminderOffsets: [],
     subtasks: [],
     attachments: [],
+    attachmentCount: 0,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     completedAt: null,
@@ -256,11 +260,80 @@ export function setSubtasks(uid: string, id: string, subtasks: Subtask[]) {
   return updateTaskFields(uid, id, { subtasks });
 }
 
-export function setTaskCompleted(uid: string, task: Task, completed: boolean) {
-  return updateTaskFields(uid, task.id, {
+/**
+ * Next date for a repeating task, matching the Flutter app's nextOccurrence so
+ * both clients advance a series identically.
+ */
+export function nextOccurrence(from: Date, recurrence: Recurrence): Date | null {
+  const d = new Date(from);
+  switch (recurrence) {
+    case "none":
+      return null;
+    case "daily":
+      d.setDate(d.getDate() + 1);
+      return d;
+    case "weekdays": {
+      do {
+        d.setDate(d.getDate() + 1);
+      } while (d.getDay() === 0 || d.getDay() === 6);
+      return d;
+    }
+    case "weekly":
+      d.setDate(d.getDate() + 7);
+      return d;
+    case "monthly":
+      d.setMonth(d.getMonth() + 1);
+      return d;
+    case "yearly":
+      d.setFullYear(d.getFullYear() + 1);
+      return d;
+  }
+}
+
+export async function setTaskCompleted(uid: string, task: Task, completed: boolean) {
+  await updateTaskFields(uid, task.id, {
     completed,
     completedAt: completed ? Timestamp.fromDate(new Date()) : null,
   });
+
+  // A repeating task spawns its next instance rather than just closing, the
+  // same as the Flutter app. Without this, completing it on the web would
+  // silently end the series.
+  if (completed && task.recurrence !== "none" && task.startDateTime) {
+    const next = nextOccurrence(task.startDateTime, task.recurrence);
+    if (next) {
+      const span = task.endDateTime ? +task.endDateTime - +task.startDateTime : null;
+      await createTask(uid, {
+        title: task.title,
+        description: task.description,
+        listId: task.listId,
+        boardId: task.boardId,
+        categoryId: task.categoryId,
+        position: task.position,
+        priority: task.priority,
+        startDateTime: next,
+        endDateTime: span === null ? null : new Date(+next + span),
+      });
+    }
+  }
+}
+
+/** Moves a repeating task to its next occurrence without completing it. */
+export async function skipOccurrence(uid: string, task: Task) {
+  if (task.recurrence === "none" || !task.startDateTime) return;
+  const next = nextOccurrence(task.startDateTime, task.recurrence);
+  if (!next) return;
+  const span = task.endDateTime ? +task.endDateTime - +task.startDateTime : null;
+  await updateTaskFields(uid, task.id, {
+    startDateTime: Timestamp.fromDate(next),
+    endDateTime: span === null ? null : Timestamp.fromDate(new Date(+next + span)),
+    subtasks: task.subtasks.map((s) => ({ ...s, done: false })),
+  });
+}
+
+/** Ends the series: the task stays, but stops repeating. */
+export function stopSeries(uid: string, taskId: string) {
+  return updateTaskFields(uid, taskId, { recurrence: "none" });
 }
 
 export async function addList(uid: string, list: Omit<TaskList, "id">) {
@@ -288,6 +361,10 @@ export async function addCategory(uid: string, category: Omit<Category, "id">) {
 
 export function deleteCategory(uid: string, id: string) {
   return deleteDoc(doc(paths.categories(uid), id));
+}
+
+export function renameCategory(uid: string, id: string, name: string) {
+  return updateDoc(doc(paths.categories(uid), id), { name, updatedAt: serverTimestamp() });
 }
 
 export async function addNote(uid: string, note: Omit<Note, "id" | "updatedAt">) {

@@ -30,8 +30,13 @@ export interface Task {
   endDateTime: Date | null;
   recurrence: Recurrence;
   reminderMinutesBefore: number | null;
+  /** Minutes before startDateTime to remind; a task can have several. */
+  reminderOffsets: number[];
   subtasks: Subtask[];
+  /** Legacy filename strings from before attachments were real uploads. */
   attachments: string[];
+  /** Denormalised count of real attachments, for the card badge. */
+  attachmentCount: number;
   createdAt: Date | null;
   updatedAt: Date | null;
   completedAt: Date | null;

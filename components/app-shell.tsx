@@ -2,13 +2,16 @@
 
 import {
   BarChart3,
+  Bell,
   CalendarDays,
+  CloudOff,
   Grid2x2,
   Home,
   Inbox,
   LayoutGrid,
   type LucideIcon,
   Notebook,
+  PartyPopper,
   Plus,
   Search,
   Settings,
@@ -32,8 +35,11 @@ const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/boards", label: "Boards", icon: LayoutGrid },
   { href: "/calendar", label: "Calendar", icon: CalendarDays },
+  { href: "/search", label: "Search", icon: Search },
   { href: "/categories", label: "Categories", icon: Tag },
   { href: "/notes", label: "Notes", icon: Notebook },
+  { href: "/reminders", label: "Reminders", icon: Bell },
+  { href: "/holidays", label: "Holidays", icon: PartyPopper },
   { href: "/focus", label: "Focus", icon: Target },
   { href: "/eisenhower", label: "Eisenhower", icon: Grid2x2 },
   { href: "/statistics", label: "Statistics", icon: BarChart3 },
@@ -138,9 +144,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-4 border-b border-line bg-surface px-4 py-3 md:px-6">
-          <button
-            type="button"
-            onClick={() => setQuickAdd(true)}
+          <Link
+            href="/search"
             className="flex h-10 flex-1 items-center gap-2.5 rounded-xl border border-line px-3.5 text-left text-[13.5px] text-muted transition hover:border-primary"
           >
             <Search className="h-4 w-4" />
@@ -148,7 +153,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <kbd className="hidden rounded border border-line px-1.5 py-0.5 text-[10px] sm:block">
               ⌘K
             </kbd>
-          </button>
+          </Link>
           <button
             type="button"
             onClick={() => setQuickAdd(true)}
@@ -159,6 +164,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
         </header>
 
+        <OfflineBanner />
         <main className="min-w-0 flex-1 overflow-x-hidden">{children}</main>
 
         {/* Mobile navigation, matching the phone screens. */}
@@ -183,6 +189,35 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* Mounted only while open, so its fields start fresh each time. */}
       {quickAdd && <QuickAddDialog open onClose={() => setQuickAdd(false)} />}
+    </div>
+  );
+}
+
+/**
+ * Shows when the browser has lost its connection. Firestore keeps serving from
+ * its IndexedDB cache and queues writes, so the app keeps working; this just
+ * makes that visible rather than leaving the user guessing.
+ */
+function OfflineBanner() {
+  const [offline, setOffline] = useState(false);
+
+  useEffect(() => {
+    const update = () => setOffline(!navigator.onLine);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
+
+  if (!offline) return null;
+
+  return (
+    <div className="flex items-center gap-2 bg-amber/15 px-4 py-2 text-[12px] font-semibold text-amber md:px-6">
+      <CloudOff className="h-4 w-4 shrink-0" />
+      Offline. Your changes are saved here and will sync when you reconnect.
     </div>
   );
 }

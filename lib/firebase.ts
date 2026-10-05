@@ -1,6 +1,12 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
-import { getFirestore, type Firestore } from "firebase/firestore";
+import {
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  type Firestore,
+} from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -14,4 +20,24 @@ const firebaseConfig = {
 /** Next.js re-executes modules on hot reload, so reuse the existing app. */
 export const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth: Auth = getAuth(app);
-export const db: Firestore = getFirestore(app);
+
+/**
+ * An IndexedDB cache so the board and calendar work with no connection, and
+ * edits queue until it returns. The multi-tab manager keeps several open tabs
+ * sharing one cache instead of fighting over it.
+ *
+ * initializeFirestore throws if it has already run (hot reload, or a second
+ * import), so fall back to the existing instance.
+ */
+function createDb(): Firestore {
+  if (typeof window === "undefined") return getFirestore(app);
+  try {
+    return initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    });
+  } catch {
+    return getFirestore(app);
+  }
+}
+
+export const db: Firestore = createDb();
