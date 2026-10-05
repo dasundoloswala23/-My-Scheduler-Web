@@ -123,7 +123,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {boards.map((b) => (
             <Link
               key={b.id}
-              href={`/boards/${b.id}`}
+              href={`/board?id=${b.id}`}
               className="flex items-center gap-2.5 rounded-[10px] px-3 py-2 text-[13px] font-semibold text-ink/80 hover:bg-primary-soft/50"
             >
               <span

@@ -120,7 +120,7 @@ export default function HomePage() {
           {boards.map((board) => (
             <Link
               key={board.id}
-              href={`/boards/${board.id}`}
+              href={`/board?id=${board.id}`}
               className="flex items-center gap-3 rounded-xl border border-line px-4 py-3 transition hover:border-primary"
             >
               <span

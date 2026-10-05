@@ -60,7 +60,7 @@ export default function BoardsPage() {
         {boards.map((board) => (
           <Link
             key={board.id}
-            href={`/boards/${board.id}`}
+            href={`/board?id=${board.id}`}
             className="card p-5 transition hover:border-primary"
           >
             <span

@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# static export output
+/out/
+
+# firebase deploy cache
+.firebase/
