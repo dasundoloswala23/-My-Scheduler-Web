@@ -18,8 +18,20 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { format } from "date-fns";
-import { Check, Circle, CircleCheck, GripVertical, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  CalendarDays,
+  Check,
+  CheckSquare,
+  Circle,
+  CircleCheck,
+  Flag,
+  GripVertical,
+  MessageSquare,
+  Tag,
+  Trash2,
+  X,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
 import { useAuth } from "@/lib/auth-context";
 import { useBoards, useCategoryMap, useLists, useTasks, tasksForList } from "@/lib/hooks";
@@ -34,7 +46,15 @@ import {
 } from "@/lib/repo";
 import { argbToCss, type Subtask } from "@/lib/types";
 
-export function TaskDetailDialog({ taskId, onClose }: { taskId: string; onClose: () => void }) {
+export function TaskDetailDialog({
+  taskId,
+  onClose,
+  onMenu = () => {},
+}: {
+  taskId: string;
+  onClose: () => void;
+  onMenu?: () => void;
+}) {
   const { user } = useAuth();
   const tasks = useTasks();
   const lists = useLists();
@@ -43,6 +63,8 @@ export function TaskDetailDialog({ taskId, onClose }: { taskId: string; onClose:
 
   const task = tasks.find((t) => t.id === taskId);
   const [newSubtask, setNewSubtask] = useState("");
+  const [descriptionDraft, setDescriptionDraft] = useState<string | null>(null);
+  const subtaskInput = useRef<HTMLInputElement>(null);
 
   // null means "not edited yet", so the live title from Firestore shows through
   // until the user types. This avoids syncing state from an effect.
@@ -87,7 +109,7 @@ export function TaskDetailDialog({ taskId, onClose }: { taskId: string; onClose:
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-[6vh]" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[86vh] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl"
+        className="flex max-h-[88vh] w-full max-w-[920px] flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl"
       >
         <div className="flex items-start justify-between p-6 pb-3">
           {category ? (
@@ -108,7 +130,21 @@ export function TaskDetailDialog({ taskId, onClose }: { taskId: string; onClose:
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 pb-4">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
+        <div className="min-w-0 flex-1 overflow-y-auto px-6 pb-4">
+          <div className="flex items-start gap-3">
+            <button
+              type="button"
+              aria-label={task.completed ? "Mark as not done" : "Mark as done"}
+              onClick={() => setTaskCompleted(user.uid, task, !task.completed)}
+              className="mt-1.5 shrink-0"
+            >
+              {task.completed ? (
+                <CircleCheck className="h-6 w-6 text-success" />
+              ) : (
+                <Circle className="h-6 w-6 text-muted" />
+              )}
+            </button>
           <input
             value={titleDraft ?? task.title}
             onChange={(e) => setTitleDraft(e.target.value)}
@@ -121,17 +157,33 @@ export function TaskDetailDialog({ taskId, onClose }: { taskId: string; onClose:
             }}
             className="w-full bg-transparent text-2xl font-bold outline-none"
           />
-          {task.description && <p className="mt-2 text-sm text-muted">{task.description}</p>}
+          </div>
 
-          <div className="mt-5 grid grid-cols-2 gap-3">
-            <Info label="Board" value={board?.name ?? "—"} />
-            <Info label="List" value={list?.name ?? "Inbox"} />
-            <Info label="Priority" value={capitalise(task.priority)} />
-            <Info
-              label="Due date"
-              value={task.startDateTime ? format(task.startDateTime, "MMM d, h:mm a") : "Not set"}
+          <div className="mt-3 flex flex-wrap gap-2 pl-9">
+            <Chip icon={Tag} label={category?.name ?? "Category"} onClick={onMenu} />
+            <Chip icon={CalendarDays} label={task.startDateTime ? format(task.startDateTime, "MMM d") : "Dates"} onClick={onMenu} />
+            <Chip icon={Flag} label={task.priority === "none" ? "Priority" : capitalise(task.priority)} onClick={onMenu} />
+            <Chip icon={CheckSquare} label="Checklist" onClick={() => subtaskInput.current?.focus()} />
+          </div>
+
+          <div className="mt-6 pl-9">
+            <h3 className="mb-2 text-base font-bold">Description</h3>
+            <textarea
+              value={descriptionDraft ?? task.description}
+              onChange={(e) => setDescriptionDraft(e.target.value)}
+              onBlur={() => {
+                const next = descriptionDraft?.trim();
+                if (next !== undefined && next !== task.description) {
+                  updateTaskFields(user.uid, task.id, { description: next });
+                }
+                setDescriptionDraft(null);
+              }}
+              rows={3}
+              placeholder="Add a more detailed description…"
+              className="w-full resize-y rounded-xl border border-line bg-background px-3.5 py-2.5 text-sm outline-none focus:border-primary"
             />
           </div>
+
 
           <div className="mt-6 flex items-center gap-2">
             <h3 className="text-base font-bold">Subtasks</h3>
@@ -208,6 +260,7 @@ export function TaskDetailDialog({ taskId, onClose }: { taskId: string; onClose:
             }}
           >
             <input
+              ref={subtaskInput}
               value={newSubtask}
               onChange={(e) => setNewSubtask(e.target.value)}
               placeholder="Add a subtask"
@@ -220,6 +273,25 @@ export function TaskDetailDialog({ taskId, onClose }: { taskId: string; onClose:
               Add
             </button>
           </form>
+        </div>
+
+        <aside className="w-full shrink-0 border-t border-line p-5 md:w-[300px] md:border-l md:border-t-0">
+          <div className="mb-3 flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-muted" />
+            <h3 className="text-sm font-bold">Activity</h3>
+          </div>
+          <ul className="space-y-3 text-[12.5px] text-muted">
+            {task.createdAt && (
+              <li>Added to <span className="font-semibold text-ink">{list?.name ?? "Inbox"}</span><br />{format(task.createdAt, "d MMM yyyy, HH:mm")}</li>
+            )}
+            {task.updatedAt && <li>Last edited {format(task.updatedAt, "d MMM yyyy, HH:mm")}</li>}
+            {task.completedAt && <li>Completed {format(task.completedAt, "d MMM yyyy, HH:mm")}</li>}
+          </ul>
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            <Info label="Board" value={board?.name ?? "—"} />
+            <Info label="List" value={list?.name ?? "Inbox"} />
+          </div>
+        </aside>
         </div>
 
         <div className="flex gap-3 border-t border-line p-4">
@@ -303,6 +375,27 @@ function SubtaskRow({
         <GripVertical className="h-4 w-4 text-muted" />
       </button>
     </div>
+  );
+}
+
+function Chip({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: typeof Tag;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12.5px] font-semibold text-muted transition hover:border-primary hover:text-primary"
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </button>
   );
 }
 

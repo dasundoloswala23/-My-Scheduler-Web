@@ -18,17 +18,16 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { ListFilter, MoreHorizontal, Plus } from "lucide-react";
+import { ListFilter, Pencil, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAuth } from "@/lib/auth-context";
 import { useCategories, useLists, useTasks, tasksForList } from "@/lib/hooks";
 import { needsRebalance, positionBetween, rebalanced } from "@/lib/position";
-import { addList, appendPosition, deleteList, moveTask, renameList } from "@/lib/repo";
+import { addList, appendPosition, createTask, moveTask, renameList } from "@/lib/repo";
 import { argbToCss, type Task, type TaskList } from "@/lib/types";
 import { useMove } from "@/lib/use-move";
 
-import { QuickAddDialog } from "./quick-add-dialog";
 import { SortableTaskCard, TaskCardBody } from "./task-card";
 import { TaskDetailDialog } from "./task-detail-dialog";
 import { TaskMenu } from "./task-menu";
@@ -44,7 +43,6 @@ export function Board({ boardId }: { boardId: string }) {
   const [filterCategory, setFilterCategory] = useState("");
   const [openTask, setOpenTask] = useState<Task | null>(null);
   const [menuTask, setMenuTask] = useState<Task | null>(null);
-  const [addTo, setAddTo] = useState<TaskList | null>(null);
 
   // Filtering only hides cards; the stored data is untouched.
   const tasks = useMemo(
@@ -175,7 +173,6 @@ export function Board({ boardId }: { boardId: string }) {
               tasks={tasksForList(tasks, list.id)}
               onOpenTask={setOpenTask}
               onMenuTask={setMenuTask}
-              onAdd={() => setAddTo(list)}
             />
           ))}
         </div>
@@ -189,16 +186,14 @@ export function Board({ boardId }: { boardId: string }) {
         </DragOverlay>
       </DndContext>
 
-      {openTask && <TaskDetailDialog taskId={openTask.id} onClose={() => setOpenTask(null)} />}
-      {menuTask && <TaskMenu task={menuTask} onClose={() => setMenuTask(null)} />}
-      {addTo && (
-        <QuickAddDialog
-          open
-          onClose={() => setAddTo(null)}
-          defaultListId={addTo.id}
-          defaultBoardId={boardId}
+      {openTask && (
+        <TaskDetailDialog
+          taskId={openTask.id}
+          onClose={() => setOpenTask(null)}
+          onMenu={() => setMenuTask(openTask)}
         />
       )}
+      {menuTask && <TaskMenu task={menuTask} onClose={() => setMenuTask(null)} />}
     </>
   );
 }
@@ -208,19 +203,45 @@ function Column({
   tasks,
   onOpenTask,
   onMenuTask,
-  onAdd,
 }: {
   list: TaskList;
   tasks: Task[];
   onOpenTask: (t: Task) => void;
   onMenuTask: (t: Task) => void;
-  onAdd: () => void;
 }) {
   const { user } = useAuth();
-  const { setNodeRef, isOver } = useDroppable({
+  const { setNodeRef } = useDroppable({
     id: `list:${list.id}`,
     data: { type: "list", listId: list.id },
   });
+
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(list.name);
+  const [composing, setComposing] = useState(false);
+  const [cardTitle, setCardTitle] = useState("");
+
+  async function saveName() {
+    const next = nameDraft.trim();
+    setEditingName(false);
+    if (!user || !next || next === list.name) {
+      setNameDraft(list.name);
+      return;
+    }
+    await renameList(user.uid, list.id, next);
+  }
+
+  async function addCard() {
+    const title = cardTitle.trim();
+    if (!user || !title) return;
+    await createTask(user.uid, {
+      title,
+      listId: list.id,
+      boardId: list.boardId,
+      position: appendPosition(tasks),
+    });
+    // Stay in the composer so several cards can be typed in a row.
+    setCardTitle("");
+  }
 
   return (
     <section className="flex w-[330px] shrink-0 flex-col rounded-[18px] bg-black/[0.035] p-2.5 dark:bg-white/[0.04]">
@@ -229,32 +250,53 @@ function Column({
           className="h-2.5 w-2.5 rounded-full"
           style={{ background: argbToCss(list.colorValue) }}
         />
-        <h3 className="text-[14px] font-bold">{list.name}</h3>
+        {editingName ? (
+          <input
+            autoFocus
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onBlur={saveName}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                setNameDraft(list.name);
+                setEditingName(false);
+              }
+            }}
+            aria-label="List name"
+            className="min-w-0 flex-1 rounded-md border border-primary bg-surface px-2 py-0.5 text-[14px] font-bold outline-none"
+          />
+        ) : (
+          <h3
+            onDoubleClick={() => {
+              setNameDraft(list.name);
+              setEditingName(true);
+            }}
+            title="Double-click to rename"
+            className="cursor-text truncate text-[14px] font-bold"
+          >
+            {list.name}
+          </h3>
+        )}
         <span className="rounded-md bg-black/[0.06] px-1.5 py-0.5 text-[11px] dark:bg-white/10">
           {tasks.length}
         </span>
-        <button
-          type="button"
-          aria-label="List actions"
-          className="ml-auto text-muted hover:text-ink"
-          onClick={async () => {
-            if (!user) return;
-            const action = window.prompt(
-              `List "${list.name}" — type "rename" or "delete"`,
-              "rename",
-            );
-            if (action === "rename") {
-              const name = window.prompt("New name", list.name);
-              if (name?.trim()) await renameList(user.uid, list.id, name.trim());
-            } else if (action === "delete" && !list.isSystem) {
-              await deleteList(user.uid, list.id);
-            }
-          }}
-        >
-          <MoreHorizontal className="h-4 w-4" />
-        </button>
+        {!editingName && (
+          <button
+            type="button"
+            aria-label="Rename list"
+            onClick={() => {
+              setNameDraft(list.name);
+              setEditingName(true);
+            }}
+            className="ml-auto text-muted hover:text-ink"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
       </header>
 
+      {/* The whole column is the drop target; an empty list still has height. */}
       <div ref={setNodeRef} className="min-h-[120px] flex-1 overflow-y-auto px-0.5">
         <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
           {tasks.map((task) => (
@@ -266,26 +308,56 @@ function Column({
             />
           ))}
         </SortableContext>
-
-        {/* The dashed zone from the design; also the drop target for an empty list. */}
-        <div
-          className={`mt-1.5 flex h-12 items-center justify-center rounded-xl border-[1.4px] border-dashed text-[12.5px] font-semibold transition-all ${
-            isOver
-              ? "h-16 border-2 border-primary bg-primary/10 text-primary"
-              : "border-primary/35 text-primary/70"
-          }`}
-        >
-          Drop task here
-        </div>
       </div>
 
-      <button
-        type="button"
-        onClick={onAdd}
-        className="mt-2 flex items-center gap-1.5 rounded-lg px-2 py-2 text-[13px] font-semibold text-primary hover:bg-primary-soft"
-      >
-        <Plus className="h-4 w-4" /> Add task
-      </button>
+      {composing ? (
+        <div className="mt-2 rounded-xl border border-primary bg-surface p-2">
+          <input
+            autoFocus
+            value={cardTitle}
+            onChange={(e) => setCardTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") addCard();
+              if (e.key === "Escape") {
+                setCardTitle("");
+                setComposing(false);
+              }
+            }}
+            placeholder="Card title…"
+            aria-label="New card title"
+            className="w-full bg-transparent px-1 py-1 text-[13.5px] outline-none"
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={addCard}
+              disabled={!cardTitle.trim()}
+              className="rounded-lg bg-primary px-3 py-1.5 text-[12.5px] font-semibold text-white disabled:opacity-50"
+            >
+              Add card
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCardTitle("");
+                setComposing(false);
+              }}
+              className="rounded-lg px-2 py-1.5 text-[12.5px] font-semibold text-muted hover:text-ink"
+            >
+              Cancel
+            </button>
+            <span className="ml-auto text-[11px] text-muted">Enter to add</span>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setComposing(true)}
+          className="mt-2 flex items-center gap-1.5 rounded-lg px-2 py-2 text-[13px] font-semibold text-primary hover:bg-primary-soft"
+        >
+          <Plus className="h-4 w-4" /> Add card
+        </button>
+      )}
     </section>
   );
 }
