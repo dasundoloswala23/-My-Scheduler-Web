@@ -1,45 +1,128 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f7f8fa;
-  --surface: #ffffff;
-  --ink: #111827;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --primary: #6c5ce7;
-  --primary-soft: #ede9ff;
-  --danger: #e5484d;
-  --success: #30a46c;
-  --amber: #e8a33d;
-  --blue: #3b82f6;
+/*
+ * Bind Tailwind's `dark:` variant to this app's theming.
+ *
+ * By default `dark:` keys off `prefers-color-scheme`, but the theme here is an
+ * explicit `data-theme` attribute set from the user's account. Without this,
+ * picking Dark while the OS is light silently applies none of the `dark:`
+ * utilities. Both cases are covered: the attribute when set, and the system
+ * preference only when the user has not chosen Light.
+ */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]) *, :root:not([data-theme="light"])) {
+      @slot;
+    }
+  }
 }
 
+/*
+ * One place for every colour that differs between light and dark.
+ *
+ * Components must use these tokens (`text-muted`, `bg-surface`, `border-line`)
+ * rather than literal #000/#fff or Tailwind's own greys, because a literal
+ * cannot change with the theme. The dark values below are chosen for contrast,
+ * not by inverting the light ones.
+ */
+:root {
+  --background: #f4f5f7;
+  --surface: #ffffff;
+  /* A panel on the background that still reads as a container: a board column. */
+  --surface-variant: #edeff3;
+  /* A well inside a surface. */
+  --surface-sunken: #f4f5f7;
+  --ink: #111827;
+  /* Secondary text. 5.9:1 on --surface, 5.5:1 on --background. */
+  --muted: #5a6372;
+  --disabled: #9ca3af;
+  --border: #e2e5ea;
+  --divider: #e8eaee;
+  --hover: rgb(0 0 0 / 0.05);
+  --selected: rgb(108 92 231 / 0.08);
+  --grid-line: #e8eaee;
+  --primary: #6c5ce7;
+  --primary-soft: #ede9ff;
+  --danger: #d7373c;
+  --success: #1f8a57;
+  --amber: #b4741d;
+  --blue: #2563eb;
+  /* How strongly a category colour is tinted behind text of that colour. */
+  --tint-strength: 12%;
+}
+
+/*
+ * Dark values are shared by the system-preference and explicit cases. Keeping
+ * them in one custom-property block avoids the two drifting apart, which is
+ * how half-themed screens happen.
+ */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --background: #0f1014;
-    --surface: #17181d;
-    --ink: #f3f4f6;
-    --muted: #9ca3af;
-    --border: #262830;
+    --surface: #1c1d23;
+    --surface-variant: #17181d;
+    --surface-sunken: #121317;
+    --ink: #f2f3f5;
+    /* 6.3:1 on --surface, 10:1 on --background. The old #6b7280 was 3.6:1. */
+    --muted: #9ca3b0;
+    --disabled: #6b7280;
+    --border: #2e3039;
+    --divider: #26282f;
+    --hover: rgb(255 255 255 / 0.08);
+    --selected: rgb(108 92 231 / 0.18);
+    --grid-line: #24262d;
     --primary-soft: #241f45;
+    --danger: #ff6369;
+    --success: #3dd68c;
+    --amber: #f5b952;
+    --blue: #6aa5ff;
+    /* A light-mode tint reads as nothing at all on a dark surface. */
+    --tint-strength: 22%;
+    color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
   --background: #0f1014;
-  --surface: #17181d;
-  --ink: #f3f4f6;
-  --muted: #9ca3af;
-  --border: #262830;
+  --surface: #1c1d23;
+  --surface-variant: #17181d;
+  --surface-sunken: #121317;
+  --ink: #f2f3f5;
+  --muted: #9ca3b0;
+  --disabled: #6b7280;
+  --border: #2e3039;
+  --divider: #26282f;
+  --hover: rgb(255 255 255 / 0.08);
+  --selected: rgb(108 92 231 / 0.18);
+  --grid-line: #24262d;
   --primary-soft: #241f45;
+  --danger: #ff6369;
+  --success: #3dd68c;
+  --amber: #f5b952;
+  --blue: #6aa5ff;
+  --tint-strength: 22%;
+  color-scheme: dark;
+}
+
+/* Explicit light, so choosing Light under a dark OS really is light. */
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-surface: var(--surface);
+  --color-surface-variant: var(--surface-variant);
+  --color-surface-sunken: var(--surface-sunken);
   --color-ink: var(--ink);
   --color-muted: var(--muted);
+  --color-disabled: var(--disabled);
   --color-line: var(--border);
+  --color-divider: var(--divider);
+  --color-grid-line: var(--grid-line);
   --color-primary: var(--primary);
   --color-primary-soft: var(--primary-soft);
   --color-danger: var(--danger);
@@ -47,6 +130,51 @@
   --color-amber: var(--amber);
   --color-blue: var(--blue);
   --font-sans: var(--font-sans);
+}
+
+/*
+ * Native controls render with the OS light palette inside a dark page unless
+ * they are told otherwise. This is the white-dropdown-in-dark-mode bug; the
+ * `color-scheme` declarations above fix the widget chrome, and these rules
+ * fix the parts the browser takes from the page.
+ */
+select,
+option,
+input,
+textarea {
+  color-scheme: inherit;
+  background-color: var(--surface);
+  color: var(--ink);
+}
+
+select option {
+  background-color: var(--surface);
+  color: var(--ink);
+}
+
+/* Date and time pickers draw their indicator glyph in near-black by default. */
+:root[data-theme="dark"] input::-webkit-calendar-picker-indicator {
+  filter: invert(1) opacity(0.65);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) input::-webkit-calendar-picker-indicator {
+    filter: invert(1) opacity(0.65);
+  }
+}
+
+::placeholder {
+  color: var(--disabled);
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+:disabled {
+  color: var(--disabled);
+  cursor: not-allowed;
 }
 
 body {

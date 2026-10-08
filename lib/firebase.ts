@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
+import { getStorage, type FirebaseStorage } from "firebase/storage";
 import {
   getFirestore,
   initializeFirestore,
@@ -41,3 +42,10 @@ function createDb(): Firestore {
 }
 
 export const db: Firestore = createDb();
+
+/**
+ * Storage for task attachments. Files live at
+ * `users/{uid}/tasks/{taskId}/{attachmentId}`, which is the path
+ * `storage.rules` guards, so ownership is decided by the path alone.
+ */
+export const storage: FirebaseStorage = getStorage(app);

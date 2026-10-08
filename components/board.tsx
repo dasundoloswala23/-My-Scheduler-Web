@@ -244,7 +244,7 @@ function Column({
   }
 
   return (
-    <section className="flex w-[330px] shrink-0 flex-col rounded-[18px] bg-black/[0.035] p-2.5 dark:bg-white/[0.04]">
+    <section className="flex w-[330px] shrink-0 flex-col rounded-[18px] border border-line bg-surface-variant p-2.5">
       <header className="flex items-center gap-2 px-1.5 pb-2">
         <span
           className="h-2.5 w-2.5 rounded-full"
@@ -278,7 +278,7 @@ function Column({
             {list.name}
           </h3>
         )}
-        <span className="rounded-md bg-black/[0.06] px-1.5 py-0.5 text-[11px] dark:bg-white/10">
+        <span className="rounded-md bg-[var(--hover)] px-1.5 py-0.5 text-[11px]">
           {tasks.length}
         </span>
         {!editingName && (

@@ -40,8 +40,17 @@ export function useMove() {
 
       try {
         // 2. Write it.
-        await moveTask(user.uid, task.id, move);
+        const result = await moveTask(user.uid, task.id, move, task.version);
         clear(task.id);
+
+        // Another device edited this task after the card was drawn. The move
+        // went through, but say so: silently overwriting is what section 33 of
+        // the brief rules out.
+        if (result.hadConflict) {
+          toast.warning("This task was changed on another device.", {
+            description: "Your move was applied on top of that change.",
+          });
+        }
 
         if (allowUndo) {
           toast(description, {

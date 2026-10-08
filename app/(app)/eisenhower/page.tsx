@@ -58,7 +58,7 @@ export default function EisenhowerPage() {
 
   return (
     <div className="px-5 py-5 md:px-8">
-      <p className="eyebrow">My scheduler</p>
+      <p className="eyebrow">MyPlanScheduler</p>
       <h1 className="mb-4 text-3xl font-bold">Eisenhower matrix</h1>
 
       <DndContext

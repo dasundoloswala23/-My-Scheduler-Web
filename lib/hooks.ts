@@ -49,6 +49,23 @@ export const useOverrides = create<OverrideState>((set) => ({
     }),
 }));
 
+/**
+ * The first Firestore listener error, if any.
+ *
+ * A listener that fails (offline with a cold cache, or a rules denial) used to
+ * fail silently, leaving every page looking like an empty account. Recording it
+ * lets the shell say what went wrong and offer a retry.
+ */
+interface DataStatusState {
+  error: { code: string; message: string } | null;
+  setError: (error: { code: string; message: string } | null) => void;
+}
+
+export const useDataStatus = create<DataStatusState>((set) => ({
+  error: null,
+  setError: (error) => set({ error }),
+}));
+
 const EMPTY: never[] = [];
 
 function useCollection<T>(
@@ -66,9 +83,15 @@ function useCollection<T>(
 
   useEffect(() => {
     if (!user) return;
-    const unsub = onSnapshot(build(user.uid) as Query, (snap) => {
-      setState({ uid: user.uid, items: snap.docs.map((d) => map(d as never)) });
-    });
+    const unsub = onSnapshot(
+      build(user.uid) as Query,
+      (snap) => {
+        setState({ uid: user.uid, items: snap.docs.map((d) => map(d as never)) });
+      },
+      (error) => {
+        useDataStatus.getState().setError({ code: error.code, message: error.message });
+      },
+    );
     return unsub;
     // `build` and `map` are module-level functions, stable across renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/lib/auth-context";
 import { useBoards, useCategories, useLists, useTasks, tasksForList } from "@/lib/hooks";
+import { usePreferences } from "@/lib/preferences";
 import { addNote, appendPosition, createTask, paths } from "@/lib/repo";
 import { addDoc, serverTimestamp, Timestamp } from "firebase/firestore";
 
@@ -39,9 +40,13 @@ export function QuickAddDialog({
 
   // The dialog is mounted only while open, so these initial values are fresh
   // every time it is opened.
+  const { preferences } = usePreferences();
+
   const [kind, setKind] = useState<Kind>("task");
   const [title, setTitle] = useState("");
-  const [categoryId, setCategoryId] = useState("");
+  // Starts from the user's default category when they have set one. The dialog
+  // is mounted only while open, so this is read fresh each time.
+  const [categoryId, setCategoryId] = useState(preferences.defaultCategoryId ?? "");
   const [boardId, setBoardId] = useState(defaultBoardId ?? "");
   const [listId, setListId] = useState(defaultListId ?? "");
   const [date, setDate] = useState(() => toDateInput(defaultDate ?? new Date()));
@@ -77,6 +82,7 @@ export function QuickAddDialog({
           listId: targetList,
           boardId: targetBoard,
           categoryId: categoryId || null,
+          priority: preferences.defaultPriority,
           position: appendPosition(siblings),
           startDateTime: when,
           endDateTime: when ? new Date(+when + 60 * 60 * 1000) : null,

@@ -61,7 +61,7 @@ export default function FocusPage() {
 
   return (
     <div className="px-5 py-5 md:px-8">
-      <p className="eyebrow">My scheduler</p>
+      <p className="eyebrow">MyPlanScheduler</p>
       <h1 className="text-3xl font-bold">Focus</h1>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_320px]">

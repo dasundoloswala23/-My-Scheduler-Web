@@ -32,7 +32,7 @@ export default function InboxPage() {
 
       <div className="mt-6 flex items-center gap-2">
         <h2 className="text-lg font-bold">Unsorted</h2>
-        <span className="rounded-md bg-black/[0.06] px-2 py-0.5 text-[11px] dark:bg-white/10">
+        <span className="rounded-md bg-[var(--hover)] px-2 py-0.5 text-[11px]">
           {unsorted.length}
         </span>
       </div>

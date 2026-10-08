@@ -10,6 +10,7 @@ import {
   Inbox,
   LayoutGrid,
   type LucideIcon,
+  MoreHorizontal,
   Notebook,
   PartyPopper,
   Plus,
@@ -24,7 +25,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { useAuth } from "@/lib/auth-context";
-import { useBoards } from "@/lib/hooks";
+import { useBoards, useDataStatus } from "@/lib/hooks";
 import { argbToCss } from "@/lib/types";
 
 import { QuickAddDialog } from "./quick-add-dialog";
@@ -88,10 +89,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen">
       <aside className="hidden w-[260px] shrink-0 flex-col border-r border-line bg-surface md:flex">
         <div className="flex items-center gap-2.5 px-5 py-4">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary">
-            <BarChart3 className="h-4 w-4 text-white" />
-          </span>
-          <span className="text-base font-bold">My scheduler</span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/icon-192.png" alt="" className="h-7 w-7 rounded-lg" />
+          <span className="text-base font-bold">MyPlanScheduler</span>
         </div>
 
         <div className="mx-3 mb-3 rounded-xl border border-line px-3 py-2.5">
@@ -165,26 +165,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
 
         <OfflineBanner />
+        <DataErrorBanner />
         <main className="min-w-0 flex-1 overflow-x-hidden">{children}</main>
 
-        {/* Mobile navigation, matching the phone screens. */}
-        <nav className="flex border-t border-line bg-surface md:hidden">
-          {NAV.slice(0, 5).map(({ href, label, icon: Icon }) => {
-            const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={`flex flex-1 flex-col items-center gap-1 py-2.5 text-[10px] font-semibold ${
-                  active ? "text-primary" : "text-muted"
-                }`}
-              >
-                <Icon className="h-5 w-5" />
-                {label}
-              </Link>
-            );
-          })}
-        </nav>
+        <MobileNav pathname={pathname} />
       </div>
 
       {/* Mounted only while open, so its fields start fresh each time. */}
@@ -219,5 +203,120 @@ function OfflineBanner() {
       <CloudOff className="h-4 w-4 shrink-0" />
       Offline. Your changes are saved here and will sync when you reconnect.
     </div>
+  );
+}
+
+/** What a listener error means, in words rather than an error code. */
+function describeDataError(code: string): string {
+  if (code === "permission-denied") {
+    return "You do not have access to this data. Try signing out and back in.";
+  }
+  if (code === "unavailable") {
+    return "Could not reach the server, and there is nothing saved on this device yet.";
+  }
+  return "Something went wrong loading your workspace.";
+}
+
+/**
+ * Shown when a Firestore listener fails. Without it a failed load looks exactly
+ * like an empty account, which is the worst possible thing to show someone.
+ */
+function DataErrorBanner() {
+  const error = useDataStatus((s) => s.error);
+  if (!error) return null;
+
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center gap-3 bg-danger/10 px-4 py-2 text-[12.5px] font-semibold text-danger md:px-6"
+    >
+      <span className="min-w-0 flex-1">{describeDataError(error.code)}</span>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="shrink-0 rounded-lg border border-danger px-3 py-1 text-[12px]"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
+const MOBILE_TABS = ["/today", "/boards", "/calendar", "/inbox"];
+
+/**
+ * Phone navigation: Today, Boards, Calendar, Inbox and More, as on the mobile
+ * apps. Everything else — Settings, Holidays, Reminders — lives under More, so
+ * no page is unreachable on a small screen.
+ */
+function MobileNav({ pathname }: { pathname: string }) {
+  const [moreOpen, setMoreOpen] = useState(false);
+  const tabs = NAV.filter((n) => MOBILE_TABS.includes(n.href)).sort(
+    (a, b) => MOBILE_TABS.indexOf(a.href) - MOBILE_TABS.indexOf(b.href),
+  );
+  const rest = NAV.filter((n) => !MOBILE_TABS.includes(n.href));
+  const onMore = rest.some((n) =>
+    n.href === "/" ? pathname === "/" : pathname.startsWith(n.href),
+  );
+
+  return (
+    <>
+      {moreOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setMoreOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-label="More"
+            onClick={(e) => e.stopPropagation()}
+            className="absolute inset-x-0 bottom-0 max-h-[70vh] overflow-y-auto rounded-t-2xl border-t border-line bg-surface p-3 pb-[max(12px,env(safe-area-inset-bottom))]"
+          >
+            <div className="grid grid-cols-3 gap-1">
+              {rest.map(({ href, label, icon: Icon }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={() => setMoreOpen(false)}
+                  className="flex min-h-[64px] flex-col items-center justify-center gap-1.5 rounded-xl text-[11px] font-semibold text-muted hover:bg-[var(--hover)]"
+                >
+                  <Icon className="h-5 w-5" />
+                  {label}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <nav className="relative z-50 flex border-t border-line bg-surface pb-[env(safe-area-inset-bottom)] md:hidden">
+        {tabs.map(({ href, label, icon: Icon }) => {
+          const active = pathname.startsWith(href);
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={`flex min-h-[52px] flex-1 flex-col items-center justify-center gap-1 text-[10px] font-semibold ${
+                active ? "text-primary" : "text-muted"
+              }`}
+            >
+              <Icon className="h-5 w-5" />
+              {label}
+            </Link>
+          );
+        })}
+        <button
+          type="button"
+          aria-expanded={moreOpen}
+          onClick={() => setMoreOpen((v) => !v)}
+          className={`flex min-h-[52px] flex-1 flex-col items-center justify-center gap-1 text-[10px] font-semibold ${
+            onMore || moreOpen ? "text-primary" : "text-muted"
+          }`}
+        >
+          <MoreHorizontal className="h-5 w-5" />
+          More
+        </button>
+      </nav>
+    </>
   );
 }

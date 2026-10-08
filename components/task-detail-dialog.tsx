@@ -33,6 +33,8 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { AttachmentSection } from "./attachment-section";
+import { ReminderEditor } from "./reminder-editor";
 import { useAuth } from "@/lib/auth-context";
 import { useBoards, useCategoryMap, useLists, useTasks, tasksForList } from "@/lib/hooks";
 import { positionBetween, rebalanced } from "@/lib/position";
@@ -273,6 +275,10 @@ export function TaskDetailDialog({
               Add
             </button>
           </form>
+
+          <ReminderEditor task={task} />
+
+          <AttachmentSection taskId={task.id} />
         </div>
 
         <aside className="w-full shrink-0 border-t border-line p-5 md:w-[300px] md:border-l md:border-t-0">

@@ -50,7 +50,7 @@ export default function LoginPage() {
         <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-[20px] bg-primary">
           <BarChart3 className="h-8 w-8 text-white" />
         </div>
-        <p className="eyebrow">My scheduler</p>
+        <p className="eyebrow">MyPlanScheduler</p>
         <h1 className="mt-1 text-3xl font-bold">{signUp ? "Create account" : "Welcome back"}</h1>
 
         {error && (

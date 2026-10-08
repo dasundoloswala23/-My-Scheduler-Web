@@ -4,6 +4,7 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  increment,
   runTransaction,
   serverTimestamp,
   setDoc,
@@ -16,7 +17,9 @@ import { Timestamp } from "firebase/firestore";
 
 import { db } from "./firebase";
 import { positionBetween } from "./position";
+import { parseReminder, type TaskReminder } from "./reminders";
 import {
+  parseAttachmentPreview,
   toDate,
   type Board,
   type Category,
@@ -65,7 +68,11 @@ export function mapTask(snap: Snap): Task {
     recurrence: (d.recurrence ?? "none") as Recurrence,
     reminderMinutesBefore: d.reminderMinutesBefore ?? null,
     reminderOffsets: (d.reminderOffsets ?? []) as number[],
+    reminders: ((d.reminders ?? []) as unknown[])
+      .map(parseReminder)
+      .filter((x): x is TaskReminder => x !== null),
     attachmentCount: d.attachmentCount ?? 0,
+    attachmentPreview: parseAttachmentPreview(d.attachmentPreview),
     subtasks: ((d.subtasks ?? []) as Subtask[])
       .slice()
       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0)),
@@ -139,7 +146,9 @@ export const mapHoliday = (snap: Snap): Holiday => {
     id: snap.id,
     name: d.name ?? "",
     date: toDate(d.date) ?? new Date(),
-    region: d.region ?? "Sri Lanka",
+    region: d.region ?? "",
+    countryCode: d.countryCode ?? "",
+    category: d.category ?? "public",
   };
 };
 
@@ -179,9 +188,31 @@ export class TaskGoneError extends Error {
  * TaskGoneError when the task was deleted on another device, so the caller
  * rolls back rather than resurrecting it.
  */
-export async function moveTask(uid: string, taskId: string, move: TaskMove): Promise<void> {
+export interface MoveResult {
+  /**
+   * True when the task had been written by another device since the card was
+   * drawn. As in the Flutter app the move still applies (last write wins), but
+   * the caller is told so it can say so rather than silently overwriting.
+   */
+  hadConflict: boolean;
+  newVersion: number;
+}
+
+/**
+ * Applies a drag-and-drop move in a transaction that bumps `version`.
+ *
+ * `expectedVersion` is the version the dragged card was showing. Throws
+ * `TaskGoneError` if the task was deleted elsewhere, so the UI rolls back
+ * instead of recreating a dead task.
+ */
+export async function moveTask(
+  uid: string,
+  taskId: string,
+  move: TaskMove,
+  expectedVersion?: number,
+): Promise<MoveResult> {
   const ref = doc(paths.tasks(uid), taskId);
-  await runTransaction(db, async (tx) => {
+  return runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new TaskGoneError();
 
@@ -202,6 +233,10 @@ export async function moveTask(uid: string, taskId: string, move: TaskMove): Pro
     }
 
     tx.update(ref, data);
+    return {
+      hadConflict: expectedVersion !== undefined && current !== expectedVersion,
+      newVersion: current + 1,
+    };
   });
 }
 
@@ -249,10 +284,18 @@ export function deleteTask(uid: string, id: string) {
   return deleteDoc(doc(paths.tasks(uid), id));
 }
 
+/**
+ * Writes a partial update to a task and bumps its `version`.
+ *
+ * Bumping is what lets another device notice that the task changed under it.
+ * The Flutter app increments on every edit for the same reason; without it a
+ * web edit would be invisible to the conflict check on a drag elsewhere.
+ */
 export function updateTaskFields(uid: string, id: string, data: DocumentData) {
   return updateDoc(doc(paths.tasks(uid), id), {
     ...data,
     updatedAt: serverTimestamp(),
+    version: increment(1),
   });
 }
 

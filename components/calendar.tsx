@@ -15,32 +15,89 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { addDays, format, startOfWeek } from "date-fns";
-import { Clock, GripVertical } from "lucide-react";
-import { useState } from "react";
+import { Clock, GripVertical, PartyPopper } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
+import {
+  holidayCountry,
+  holidaysByDay,
+  holidaysOn,
+  holidayCategoryLabel,
+  type HolidayEntry,
+} from "@/lib/holidays";
 import { useCategoryMap, useHolidays, useTasks, tasksForDay, isSameDay } from "@/lib/hooks";
+import {
+  DENSITY_HOUR_HEIGHT,
+  densityShowsDetail,
+  usePreferences,
+  type CalendarViewPref,
+} from "@/lib/preferences";
 import { argbToCss, taskDurationMinutes, type Task } from "@/lib/types";
 import { useMove } from "@/lib/use-move";
 
 import { TaskCardBody } from "./task-card";
 import { TaskDetailDialog } from "./task-detail-dialog";
 
-const HOUR_HEIGHT = 56;
 const SLOT_MINUTES = 15;
-const SLOT_HEIGHT = (HOUR_HEIGHT * SLOT_MINUTES) / 60;
 const SLOTS_PER_DAY = (24 * 60) / SLOT_MINUTES;
 
-type View = "day" | "week" | "month";
+type View = CalendarViewPref;
+
+const VIEWS: { id: View; label: string }[] = [
+  { id: "day", label: "Day" },
+  { id: "threeDay", label: "3 Days" },
+  { id: "week", label: "Week" },
+  { id: "month", label: "Month" },
+  { id: "agenda", label: "Agenda" },
+];
+
+/** Views that lay tasks out on a time grid. */
+function isTimeGrid(view: View): boolean {
+  return view === "day" || view === "threeDay" || view === "week";
+}
 
 export function Calendar() {
   const tasks = useTasks();
-  const holidays = useHolidays();
+  const userHolidays = useHolidays();
   const move = useMove();
+  const { preferences, save } = usePreferences();
 
-  const [view, setView] = useState<View>("week");
+  // null means "use the saved default", so the page honours the preference on
+  // open without fighting a change made while it is on screen.
+  const [chosenView, setChosenView] = useState<View | null>(null);
+  const view = chosenView ?? preferences.calendarDefaultView;
+  const hourHeight = DENSITY_HOUR_HEIGHT[preferences.calendarDensity];
+
   const [anchor, setAnchor] = useState(new Date());
   const [active, setActive] = useState<Task | null>(null);
   const [openTask, setOpenTask] = useState<Task | null>(null);
+
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const appliedScroll = useRef<number | null>(null);
+
+  /** Records the choice locally and in the account, so the view persists. */
+  function selectView(next: View) {
+    setChosenView(next);
+    if (next !== preferences.calendarDefaultView) void save({ calendarDefaultView: next });
+  }
+
+  // Put the viewport at the user's preferred hour (9 AM by default) when the
+  // grid opens, and again if the preference or the density changes. Earlier
+  // hours stay above it, reachable by scrolling up.
+  useLayoutEffect(() => {
+    if (!isTimeGrid(view)) return;
+    const el = gridRef.current;
+    if (!el) return;
+    const offset = preferences.calendarScrollHour * hourHeight;
+    if (appliedScroll.current === offset) return;
+    appliedScroll.current = offset;
+    el.scrollTop = Math.min(offset, el.scrollHeight - el.clientHeight);
+  }, [view, hourHeight, preferences.calendarScrollHour]);
+
+  // Changing view rebuilds the grid, so allow the scroll to be re-applied.
+  useEffect(() => {
+    if (!isTimeGrid(view)) appliedScroll.current = null;
+  }, [view]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -48,12 +105,37 @@ export function Calendar() {
     useSensor(KeyboardSensor),
   );
 
-  const days =
-    view === "day"
-      ? [anchor]
-      : Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(anchor, { weekStartsOn: 1 }), i));
+  const days = useMemo(() => {
+    if (view === "day") return [anchor];
+    if (view === "threeDay") return Array.from({ length: 3 }, (_, i) => addDays(anchor, i));
+
+    const week = Array.from(
+      { length: 7 },
+      (_, i) =>
+        addDays(startOfWeek(anchor, { weekStartsOn: preferences.weekStartsOnMonday ? 1 : 0 }), i),
+    );
+    if (preferences.showWeekends) return week;
+    return week.filter((d) => d.getDay() !== 0 && d.getDay() !== 6);
+  }, [view, anchor, preferences.weekStartsOnMonday, preferences.showWeekends]);
+
+  // Memoised so the child views' own holiday memos are not invalidated by a
+  // fresh object literal on every render.
+  const holidayOptions = useMemo(
+    () => ({
+      countries: preferences.holidayCountries,
+      categories: preferences.holidayCategories,
+      userHolidays,
+    }),
+    [preferences.holidayCountries, preferences.holidayCategories, userHolidays],
+  );
+
+  // One holiday table per visible range, rather than one lookup per cell.
+  const dayHolidays = useMemo(() => holidaysByDay(days, holidayOptions), [days, holidayOptions]);
 
   const unscheduled = tasks.filter((t) => !t.startDateTime && !t.completed);
+
+  /** How far the arrows move, in days, for the current view. */
+  const span = view === "day" ? 1 : view === "threeDay" ? 3 : view === "month" ? 30 : 7;
 
   function onDragStart(e: DragStartEvent) {
     setActive((e.active.data.current?.task as Task) ?? null);
@@ -99,7 +181,8 @@ export function Calendar() {
         <div className="ml-auto flex items-center gap-1.5">
           <button
             type="button"
-            onClick={() => setAnchor(addDays(anchor, view === "day" ? -1 : -7))}
+            aria-label="Previous"
+            onClick={() => setAnchor(addDays(anchor, -span))}
             className="rounded-lg border border-line px-2.5 py-1.5 text-sm"
           >
             ‹
@@ -113,63 +196,106 @@ export function Calendar() {
           </button>
           <button
             type="button"
-            onClick={() => setAnchor(addDays(anchor, view === "day" ? 1 : 7))}
+            aria-label="Next"
+            onClick={() => setAnchor(addDays(anchor, span))}
             className="rounded-lg border border-line px-2.5 py-1.5 text-sm"
           >
             ›
           </button>
-          <div className="ml-2 flex overflow-hidden rounded-lg border border-line">
-            {(["day", "week", "month"] as View[]).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => setView(v)}
-                className={`px-3 py-1.5 text-[13px] font-semibold capitalize ${
-                  view === v ? "bg-primary text-white" : ""
-                }`}
-              >
-                {v}
-              </button>
-            ))}
-          </div>
+
+          {/* Layout density sits beside the view switcher because they are the
+              same kind of choice: how the calendar presents itself. */}
+          <label className="sr-only" htmlFor="calendar-density">
+            Calendar layout
+          </label>
+          <select
+            id="calendar-density"
+            value={preferences.calendarDensity}
+            onChange={(e) =>
+              void save({
+                calendarDensity: e.target.value as typeof preferences.calendarDensity,
+              })
+            }
+            className="ml-2 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-[13px] font-semibold text-ink"
+          >
+            <option value="compact">Compact</option>
+            <option value="comfortable">Comfortable</option>
+            <option value="detailed">Detailed</option>
+          </select>
         </div>
       </div>
 
+      {/* The view selector gets its own scrollable row: five options do not fit
+          across a phone, and squeezing them would clip the labels. */}
+      <div className="mb-3 flex gap-1.5 overflow-x-auto px-5 pb-1">
+        {VIEWS.map((v) => (
+          <button
+            key={v.id}
+            type="button"
+            onClick={() => selectView(v.id)}
+            aria-pressed={view === v.id}
+            className={`shrink-0 rounded-full border px-3.5 py-1.5 text-[13px] font-semibold ${
+              view === v.id
+                ? "border-primary bg-primary text-white"
+                : "border-line text-muted hover:text-ink"
+            }`}
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
+
       {view === "month" ? (
-        <MonthGrid anchor={anchor} tasks={tasks} onPick={(d) => { setAnchor(d); setView("day"); }} />
+        <MonthGrid
+          anchor={anchor}
+          tasks={tasks}
+          weekStartsOnMonday={preferences.weekStartsOnMonday}
+          holidayOptions={holidayOptions}
+          onPick={(d) => {
+            setAnchor(d);
+            selectView("day");
+          }}
+        />
+      ) : view === "agenda" ? (
+        <AgendaList
+          from={anchor}
+          tasks={tasks}
+          holidayOptions={holidayOptions}
+          onOpen={setOpenTask}
+        />
       ) : (
         <div className="flex gap-4 px-5 pb-6">
           <UnscheduledPanel tasks={unscheduled} />
           <div className="card min-w-0 flex-1 overflow-hidden">
             <div className="flex border-b border-line">
               <div className="w-14 shrink-0" />
-              {days.map((day) => {
-                const holiday = holidays.find((h) => isSameDay(h.date, day));
-                return (
-                  <div key={+day} className="flex-1 py-2 text-center">
-                    <p className="eyebrow">{format(day, "EEE")}</p>
-                    <p
-                      className={`mx-auto mt-1 flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold ${
-                        isSameDay(day, new Date()) ? "bg-primary text-white" : ""
-                      }`}
-                    >
-                      {format(day, "d")}
-                    </p>
-                    {holiday && (
-                      <p className="truncate px-1 text-[10px] text-amber">{holiday.name}</p>
-                    )}
-                  </div>
-                );
-              })}
+              {days.map((day) => (
+                <div key={+day} className="min-w-0 flex-1 py-2 text-center">
+                  <p className="eyebrow">{format(day, "EEE")}</p>
+                  <p
+                    className={`mx-auto mt-1 flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold ${
+                      isSameDay(day, new Date()) ? "bg-primary text-white" : ""
+                    }`}
+                  >
+                    {format(day, "d")}
+                  </p>
+                  {/* Holidays render as metadata beside the date. They are not
+                      tasks and have no drop behaviour, so they cannot interfere
+                      with scheduling, and tasks on the day still show below. */}
+                  {holidaysOn(dayHolidays, day).map((h) => (
+                    <HolidayPill key={h.id} holiday={h} />
+                  ))}
+                </div>
+              ))}
             </div>
 
-            <div className="max-h-[62vh] overflow-y-auto">
-              <div className="flex" style={{ height: HOUR_HEIGHT * 24 }}>
+            <div ref={gridRef} className="max-h-[62vh] overflow-y-auto">
+              <div className="flex" style={{ height: hourHeight * 24 }}>
                 <div className="w-14 shrink-0">
                   {Array.from({ length: 24 }, (_, h) => (
                     <div
                       key={h}
-                      style={{ height: HOUR_HEIGHT }}
+                      style={{ height: hourHeight }}
                       className="pr-2 text-right text-[10.5px] text-muted"
                     >
                       {format(new Date(2020, 0, 1, h), "h a")}
@@ -181,6 +307,8 @@ export function Calendar() {
                     key={+day}
                     day={day}
                     tasks={tasksForDay(tasks, day)}
+                    hourHeight={hourHeight}
+                    showDetail={densityShowsDetail(preferences.calendarDensity)}
                     onOpen={setOpenTask}
                   />
                 ))}
@@ -203,38 +331,83 @@ export function Calendar() {
   );
 }
 
+/** A holiday on the calendar: metadata, never a task. */
+function HolidayPill({ holiday }: { holiday: HolidayEntry }) {
+  const country = holidayCountry(holiday.countryCode);
+  return (
+    <p
+      title={`${holiday.name} · ${holidayCategoryLabel(holiday.category)}`}
+      className="mx-1 mt-1 truncate rounded px-1 py-0.5 text-[10px] font-semibold text-amber"
+      style={{ background: "color-mix(in srgb, var(--amber) var(--tint-strength), transparent)" }}
+    >
+      {country ? `${country.flag} ` : ""}
+      {holiday.name}
+    </p>
+  );
+}
+
 function DayColumn({
   day,
   tasks,
+  hourHeight,
+  showDetail,
   onOpen,
 }: {
   day: Date;
   tasks: Task[];
+  hourHeight: number;
+  showDetail: boolean;
   onOpen: (t: Task) => void;
 }) {
+  const now = new Date();
+  const isToday = isSameDay(day, now);
+
   return (
     <div className="relative min-w-0 flex-1 border-l border-line">
       {Array.from({ length: 24 }, (_, h) => (
-        <div key={h} style={{ height: HOUR_HEIGHT }} className="border-t border-line/70" />
+        <div
+          key={h}
+          style={{ height: hourHeight, borderTopColor: "var(--grid-line)" }}
+          className="border-t"
+        />
       ))}
 
       <div className="absolute inset-0">
         {Array.from({ length: SLOTS_PER_DAY }, (_, s) => (
           <Slot
             key={s}
+            height={(hourHeight * SLOT_MINUTES) / 60}
             start={new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, s * SLOT_MINUTES)}
           />
         ))}
       </div>
 
       {tasks.map((task) => (
-        <Event key={task.id} task={task} onOpen={() => onOpen(task)} />
+        <Event
+          key={task.id}
+          task={task}
+          hourHeight={hourHeight}
+          showDetail={showDetail}
+          onOpen={() => onOpen(task)}
+        />
       ))}
+
+      {/* Current-time line, drawn over events and ignoring pointer events so it
+          cannot block a drop. */}
+      {isToday && (
+        <div
+          className="pointer-events-none absolute inset-x-0 z-20 flex items-center"
+          style={{ top: ((now.getHours() * 60 + now.getMinutes()) / 60) * hourHeight }}
+        >
+          <span className="h-[7px] w-[7px] rounded-full bg-danger" />
+          <span className="h-[1.5px] flex-1 bg-danger" />
+        </div>
+      )}
     </div>
   );
 }
 
-function Slot({ start }: { start: Date }) {
+function Slot({ start, height }: { start: Date; height: number }) {
   const { setNodeRef, isOver } = useDroppable({
     id: `slot:${+start}`,
     data: { type: "slot", start },
@@ -242,13 +415,23 @@ function Slot({ start }: { start: Date }) {
   return (
     <div
       ref={setNodeRef}
-      style={{ height: SLOT_HEIGHT }}
+      style={{ height }}
       className={isOver ? "border-t-2 border-primary bg-primary/20" : ""}
     />
   );
 }
 
-function Event({ task, onOpen }: { task: Task; onOpen: () => void }) {
+function Event({
+  task,
+  hourHeight,
+  showDetail,
+  onOpen,
+}: {
+  task: Task;
+  hourHeight: number;
+  showDetail: boolean;
+  onOpen: () => void;
+}) {
   const categories = useCategoryMap();
   const move = useMove();
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -259,8 +442,8 @@ function Event({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const [resizeDelta, setResizeDelta] = useState(0);
 
   const start = task.startDateTime!;
-  const top = ((start.getHours() * 60 + start.getMinutes()) / 60) * HOUR_HEIGHT;
-  const baseHeight = (taskDurationMinutes(task) / 60) * HOUR_HEIGHT;
+  const top = ((start.getHours() * 60 + start.getMinutes()) / 60) * hourHeight;
+  const baseHeight = (taskDurationMinutes(task) / 60) * hourHeight;
   const height = Math.max(22, baseHeight + resizeDelta);
 
   const color = task.categoryId ? categories[task.categoryId] : undefined;
@@ -279,7 +462,7 @@ function Event({ task, onOpen }: { task: Task; onOpen: () => void }) {
       setResizeDelta(0);
       if (Math.abs(delta) < 4) return;
 
-      const minutes = Math.round(((baseHeight + delta) / HOUR_HEIGHT) * 60);
+      const minutes = Math.round(((baseHeight + delta) / hourHeight) * 60);
       const snapped = Math.min(24 * 60, Math.max(SLOT_MINUTES, Math.round(minutes / SLOT_MINUTES) * SLOT_MINUTES));
       await move(
         task,
@@ -309,14 +492,14 @@ function Event({ task, onOpen }: { task: Task; onOpen: () => void }) {
         onClick={onOpen}
         className="h-full cursor-grab touch-none overflow-hidden rounded-lg px-2 py-1 active:cursor-grabbing"
         style={{
-          background: `color-mix(in srgb, ${css} 14%, transparent)`,
+          background: `color-mix(in srgb, ${css} var(--tint-strength), transparent)`,
           borderLeft: `3px solid ${css}`,
         }}
       >
         <p className="truncate text-[12px] font-bold" style={{ color: css }}>
           {task.title}
         </p>
-        {height > 40 && (
+        {showDetail && height > 40 && (
           <p className="truncate text-[10.5px]" style={{ color: css }}>
             {format(start, "h:mm")} – {format(new Date(+start + taskDurationMinutes(task) * 60000), "h:mm a")}
           </p>
@@ -399,30 +582,54 @@ function UnscheduledCard({ task }: { task: Task }) {
   );
 }
 
+interface HolidayOptions {
+  countries: string[];
+  categories: string[];
+  userHolidays: Parameters<typeof holidaysByDay>[1]["userHolidays"];
+}
+
 function MonthGrid({
   anchor,
   tasks,
+  weekStartsOnMonday,
+  holidayOptions,
   onPick,
 }: {
   anchor: Date;
   tasks: Task[];
+  weekStartsOnMonday: boolean;
+  holidayOptions: HolidayOptions;
   onPick: (d: Date) => void;
 }) {
-  const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
-  const leading = (first.getDay() + 6) % 7;
-  const daysInMonth = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0).getDate();
-  const cells: (Date | null)[] = [
-    ...Array.from({ length: leading }, () => null),
-    ...Array.from(
-      { length: daysInMonth },
-      (_, i) => new Date(anchor.getFullYear(), anchor.getMonth(), i + 1),
-    ),
-  ];
+  // Plain values, so the memo dependencies below stay simple expressions.
+  const year = anchor.getFullYear();
+  const month = anchor.getMonth();
+
+  const realDays = useMemo(
+    () =>
+      Array.from(
+        { length: new Date(year, month + 1, 0).getDate() },
+        (_, i) => new Date(year, month, i + 1),
+      ),
+    [year, month],
+  );
+
+  const firstWeekday = weekStartsOnMonday ? 1 : 0;
+  const leading = (new Date(year, month, 1).getDay() - firstWeekday + 7) % 7;
+  const cells: (Date | null)[] = [...Array.from({ length: leading }, () => null), ...realDays];
+
+  const dayHolidays = useMemo(
+    () => holidaysByDay(realDays, holidayOptions),
+    [realDays, holidayOptions],
+  );
+
+  const mondayFirst = ["M", "T", "W", "T", "F", "S", "S"];
+  const headers = weekStartsOnMonday ? mondayFirst : ["S", ...mondayFirst.slice(0, 6)];
 
   return (
     <div className="card mx-5 mb-6 p-4">
       <div className="grid grid-cols-7 pb-2">
-        {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
+        {headers.map((d, i) => (
           <p key={i} className="text-center text-[11px] text-muted">
             {d}
           </p>
@@ -430,7 +637,17 @@ function MonthGrid({
       </div>
       <div className="grid grid-cols-7 gap-1">
         {cells.map((day, i) =>
-          day ? <MonthCell key={i} day={day} tasks={tasksForDay(tasks, day)} onPick={onPick} /> : <div key={i} />,
+          day ? (
+            <MonthCell
+              key={i}
+              day={day}
+              tasks={tasksForDay(tasks, day)}
+              holiday={holidaysOn(dayHolidays, day)[0] ?? null}
+              onPick={onPick}
+            />
+          ) : (
+            <div key={i} />
+          ),
         )}
       </div>
     </div>
@@ -440,10 +657,12 @@ function MonthGrid({
 function MonthCell({
   day,
   tasks,
+  holiday,
   onPick,
 }: {
   day: Date;
   tasks: Task[];
+  holiday: HolidayEntry | null;
   onPick: (d: Date) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({
@@ -456,17 +675,29 @@ function MonthCell({
       ref={setNodeRef}
       type="button"
       onClick={() => onPick(day)}
+      title={holiday ? `${holiday.name} · ${holidayCategoryLabel(holiday.category)}` : undefined}
       className={`flex aspect-square flex-col items-center justify-center rounded-xl transition ${
-        isOver ? "border-2 border-primary bg-primary-soft" : "hover:bg-primary-soft/50"
+        isOver ? "border-2 border-primary bg-primary-soft" : "hover:bg-[var(--hover)]"
       }`}
     >
       <span
         className={`flex h-7 w-7 items-center justify-center rounded-full text-[13px] font-semibold ${
-          isSameDay(day, new Date()) ? "bg-primary text-white" : ""
+          isSameDay(day, new Date())
+            ? "bg-primary text-white"
+            : holiday
+              ? "text-amber"
+              : ""
         }`}
       >
         {day.getDate()}
       </span>
+      {/* The holiday's name, not just a coloured number, so the day says what
+          it is without being opened. */}
+      {holiday && (
+        <span className="w-full truncate px-1 text-[8.5px] font-semibold text-amber">
+          {holiday.name}
+        </span>
+      )}
       <span className="mt-1 flex gap-0.5">
         {tasks.slice(0, 3).map((t) => (
           <span
@@ -477,5 +708,112 @@ function MonthCell({
         ))}
       </span>
     </button>
+  );
+}
+
+/**
+ * The agenda view: a flat list of the next two weeks, holidays included.
+ *
+ * A holiday never hides the day's tasks — both are listed, which is what
+ * section 20 of the brief asks for.
+ */
+function AgendaList({
+  from,
+  tasks,
+  holidayOptions,
+  onOpen,
+}: {
+  from: Date;
+  tasks: Task[];
+  holidayOptions: HolidayOptions;
+  onOpen: (t: Task) => void;
+}) {
+  const categories = useCategoryMap();
+  const days = useMemo(() => Array.from({ length: 14 }, (_, i) => addDays(from, i)), [from]);
+  const dayHolidays = useMemo(
+    () => holidaysByDay(days, holidayOptions),
+    [days, holidayOptions],
+  );
+
+  const rows = days
+    .map((day) => ({
+      day,
+      holidays: holidaysOn(dayHolidays, day),
+      dayTasks: tasksForDay(tasks, day),
+    }))
+    .filter((r) => r.holidays.length > 0 || r.dayTasks.length > 0);
+
+  if (rows.length === 0) {
+    return (
+      <div className="card mx-5 mb-6 px-6 py-14 text-center">
+        <p className="text-sm font-semibold">Nothing scheduled</p>
+        <p className="mt-1 text-[13px] text-muted">
+          The next two weeks are clear. Drag a task onto the calendar to schedule it.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-5 mb-6 space-y-5">
+      {rows.map(({ day, holidays, dayTasks }) => (
+        <section key={+day}>
+          <h3 className="mb-2 text-sm font-bold">{format(day, "EEEE, MMMM d")}</h3>
+
+          {holidays.map((h) => {
+            const country = holidayCountry(h.countryCode);
+            return (
+              <div
+                key={h.id}
+                className="mb-2 flex items-center gap-2.5 rounded-xl px-3 py-2.5"
+                style={{
+                  background:
+                    "color-mix(in srgb, var(--amber) var(--tint-strength), transparent)",
+                }}
+              >
+                <PartyPopper className="h-4 w-4 shrink-0 text-amber" />
+                <p className="min-w-0 flex-1 truncate text-[13px] font-semibold">
+                  {country ? `${country.flag} ` : ""}
+                  {h.name}
+                </p>
+                <span className="shrink-0 text-[11px] text-muted">
+                  {holidayCategoryLabel(h.category)}
+                </span>
+              </div>
+            );
+          })}
+
+          {dayTasks.map((t) => {
+            const category = t.categoryId ? categories[t.categoryId] : undefined;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => onOpen(t)}
+                className="mb-2 flex w-full items-center gap-3 rounded-xl border border-line px-3 py-2.5 text-left hover:bg-[var(--hover)]"
+              >
+                <span className="w-16 shrink-0 text-[12.5px] font-semibold text-muted">
+                  {t.startDateTime ? format(t.startDateTime, "HH:mm") : "—"}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-semibold">{t.title}</span>
+                  <span className="block truncate text-[12px] text-muted">
+                    {[category?.name, `${taskDurationMinutes(t)} min`]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </span>
+                {category && (
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ background: argbToCss(category.colorValue) }}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </section>
+      ))}
+    </div>
   );
 }

@@ -89,7 +89,7 @@ export default function StatisticsPage() {
                       style={{ background: argbToCss(c.colorValue) }}
                     />
                     <span className="w-28 shrink-0 truncate text-[13px] font-semibold">{c.name}</span>
-                    <span className="h-[7px] flex-1 overflow-hidden rounded-full bg-black/[0.06] dark:bg-white/10">
+                    <span className="h-[7px] flex-1 overflow-hidden rounded-full bg-[var(--hover)]">
                       <span
                         className="block h-full rounded-full"
                         style={{ width: `${share * 100}%`, background: argbToCss(c.colorValue) }}

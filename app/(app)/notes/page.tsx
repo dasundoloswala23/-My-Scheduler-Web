@@ -25,7 +25,7 @@ export default function NotesPage() {
     <div className="px-5 py-5 md:px-8">
       <div className="flex items-center justify-between">
         <div>
-          <p className="eyebrow">My scheduler</p>
+          <p className="eyebrow">MyPlanScheduler</p>
           <h1 className="text-3xl font-bold">Notes</h1>
         </div>
         <button
