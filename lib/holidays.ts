@@ -30,6 +30,46 @@ export const HOLIDAY_CATEGORIES: { id: HolidayCategoryId; label: string; plural:
   { id: "observance", label: "Observance", plural: "Observances" },
 ];
 
+/**
+ * The four kinds of holiday the settings screen offers. Documents and
+ * preferences keep the finer category ids, so nothing already stored changes
+ * meaning and the Flutter app stays compatible. "Other" stands for the three that
+ * are not a public, bank or mercantile holiday.
+ */
+export type HolidayGroupId = "public" | "bank" | "mercantile" | "other";
+
+export const HOLIDAY_GROUPS: { id: HolidayGroupId; label: string; categories: HolidayCategoryId[] }[] =
+  [
+    { id: "public", label: "Public holidays", categories: ["public"] },
+    { id: "bank", label: "Bank holidays", categories: ["bank"] },
+    { id: "mercantile", label: "Mercantile holidays", categories: ["mercantile"] },
+    {
+      id: "other",
+      label: "Other (national, religious, observances)",
+      categories: ["national", "religious", "observance"],
+    },
+  ];
+
+/** True when any of the group's categories is selected. */
+export function groupIsOn(groupId: HolidayGroupId, selected: Iterable<string>): boolean {
+  const set = new Set(selected);
+  return HOLIDAY_GROUPS.find((g) => g.id === groupId)!.categories.some((c) => set.has(c));
+}
+
+/** `selected` with a group switched on or off; other groups are untouched. */
+export function toggleGroup(
+  groupId: HolidayGroupId,
+  selected: Iterable<string>,
+  on: boolean,
+): string[] {
+  const next = new Set(selected);
+  for (const c of HOLIDAY_GROUPS.find((g) => g.id === groupId)!.categories) {
+    if (on) next.add(c);
+    else next.delete(c);
+  }
+  return [...next];
+}
+
 export function holidayCategoryLabel(id: string): string {
   return HOLIDAY_CATEGORIES.find((c) => c.id === id)?.label ?? "Holiday";
 }

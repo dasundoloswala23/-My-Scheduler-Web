@@ -6,6 +6,9 @@ import {
   holidaysByDay,
   holidaysForYears,
   holidaysOn,
+  HOLIDAY_GROUPS,
+  groupIsOn,
+  toggleGroup,
   holidayCountry,
   type HolidayEntry,
 } from "./holidays.ts";
@@ -165,5 +168,34 @@ describe("country lookup", () => {
   it("returns a flag for a known code and nothing for an unknown one", () => {
     assert.equal(holidayCountry("LK")?.name, "Sri Lanka");
     assert.equal(holidayCountry("ZZ"), undefined);
+  });
+});
+
+describe("holiday groups: Public / Bank / Mercantile / Other", () => {
+  it("Other stands for national, religious and observance together", () => {
+    assert.deepEqual(HOLIDAY_GROUPS.find((g) => g.id === "other")!.categories, [
+      "national",
+      "religious",
+      "observance",
+    ]);
+    assert.deepEqual(
+      HOLIDAY_GROUPS.map((g) => g.label.split(" ")[0]),
+      ["Public", "Bank", "Mercantile", "Other"],
+    );
+  });
+
+  it("switching a group changes only its own categories", () => {
+    const on = toggleGroup("other", ["public"], true).sort();
+    assert.deepEqual(on, ["national", "observance", "public", "religious"]);
+    assert.deepEqual(toggleGroup("other", on, false), ["public"]);
+    assert.equal(groupIsOn("public", ["bank"]), false);
+    assert.equal(groupIsOn("other", ["religious"]), true);
+  });
+
+  it("Sri Lanka with Mercantile on and Public off shows only mercantile holidays", () => {
+    let cats: string[] = ["public", "bank", "mercantile"];
+    cats = toggleGroup("public", cats, false);
+    cats = toggleGroup("bank", cats, false);
+    assert.deepEqual(cats, ["mercantile"]);
   });
 });

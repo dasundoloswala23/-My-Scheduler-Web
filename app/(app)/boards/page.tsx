@@ -5,7 +5,7 @@ import Link from "next/link";
 
 import { useAuth } from "@/lib/auth-context";
 import { useBoards, useLists, useTasks } from "@/lib/hooks";
-import { addBoard, addList, appendPosition } from "@/lib/repo";
+import { addBoard, appendPosition } from "@/lib/repo";
 import { argbToCss } from "@/lib/types";
 
 export default function BoardsPage() {
@@ -19,25 +19,13 @@ export default function BoardsPage() {
     const name = window.prompt("Board name");
     if (!name?.trim()) return;
 
-    const boardId = await addBoard(user.uid, {
+    // addBoard creates the board with its default lists, including Complete.
+    await addBoard(user.uid, {
       name: name.trim(),
       colorValue: 0xff6c5ce7,
       position: appendPosition(boards),
       workspace: "Personal workspace",
     });
-    // A new board starts with the same default columns as the first one.
-    const names = ["Inbox", "Todo", "In progress", "Waiting", "Done"];
-    await Promise.all(
-      names.map((listName, i) =>
-        addList(user.uid, {
-          boardId,
-          name: listName,
-          position: (i + 1) * 1000,
-          colorValue: 0xff9ca3af,
-          isSystem: true,
-        }),
-      ),
-    );
   }
 
   return (

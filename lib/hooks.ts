@@ -68,7 +68,7 @@ export const useDataStatus = create<DataStatusState>((set) => ({
 
 const EMPTY: never[] = [];
 
-function useCollection<T>(
+export function useCollection<T>(
   build: ((uid: string) => Query) | ((uid: string) => ReturnType<typeof paths.tasks>),
   map: (snap: never) => T,
 ): T[] {

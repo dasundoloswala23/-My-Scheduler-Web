@@ -55,6 +55,16 @@ export interface Task {
   createdAt: Date | null;
   updatedAt: Date | null;
   completedAt: Date | null;
+  /**
+   * The list the task was in when it was completed, so reopening can put it back.
+   * Shared with the Flutter app, which writes and reads it too.
+   */
+  completedFromListId: string | null;
+  /**
+   * The id of the next occurrence a repeating task spawned when it was completed.
+   * Its presence is what stops a second completion creating a second one.
+   */
+  spawnedNextTaskId: string | null;
   version: number;
 }
 
@@ -91,6 +101,8 @@ export interface TaskList {
   position: number;
   colorValue: number;
   isSystem: boolean;
+  /** `"complete"` marks the board's Complete list; null for every other list. */
+  kind: string | null;
 }
 
 export interface Category {

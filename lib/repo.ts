@@ -4,11 +4,14 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
   increment,
+  query,
   runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
   writeBatch,
   type DocumentData,
   type QueryDocumentSnapshot,
@@ -16,8 +19,18 @@ import {
 import { Timestamp } from "firebase/firestore";
 
 import { db } from "./firebase";
-import { positionBetween } from "./position";
-import { parseReminder, type TaskReminder } from "./reminders";
+import { recomputeForTask, unlinkTask } from "./flow-repo";
+import { chooseReopenList, planCompletion, planReopen } from "./completion.ts";
+import {
+  COMPLETE_KIND,
+  DEFAULT_LISTS,
+  LISTS_VERSION,
+  isCompleteList,
+  planListMove,
+} from "./lists.ts";
+import { positionBetween, rebalanced } from "./position";
+import { nextOccurrence } from "./recurrence.ts";
+import { parseReminder, reminderToJson, type TaskReminder } from "./reminders";
 import {
   parseAttachmentPreview,
   toDate,
@@ -80,6 +93,8 @@ export function mapTask(snap: Snap): Task {
     createdAt: toDate(d.createdAt),
     updatedAt: toDate(d.updatedAt),
     completedAt: toDate(d.completedAt),
+    completedFromListId: d.completedFromListId ?? null,
+    spawnedNextTaskId: d.spawnedNextTaskId ?? null,
     version: d.version ?? 1,
   };
 }
@@ -104,6 +119,7 @@ export const mapList = (snap: Snap): TaskList => {
     position: d.position ?? 0,
     colorValue: d.colorValue ?? 0xff9ca3af,
     isSystem: !!d.isSystem,
+    kind: typeof d.kind === "string" ? d.kind : null,
   };
 };
 
@@ -253,6 +269,13 @@ export interface NewTask {
 }
 
 export async function createTask(uid: string, task: NewTask): Promise<string> {
+  // A task created straight into the Complete list is a finished task.
+  let inComplete = false;
+  if (task.listId) {
+    const listSnap = await getDoc(doc(paths.lists(uid), task.listId));
+    inComplete = listSnap.exists() && isCompleteList(mapList(listSnap as Snap));
+  }
+
   const ref = await addDoc(paths.tasks(uid), {
     title: task.title,
     description: task.description ?? "",
@@ -261,7 +284,9 @@ export async function createTask(uid: string, task: NewTask): Promise<string> {
     categoryId: task.categoryId ?? null,
     parentTaskId: null,
     position: task.position ?? 1000,
-    completed: false,
+    completed: inComplete,
+    completedFromListId: null,
+    spawnedNextTaskId: null,
     priority: task.priority ?? "none",
     startDateTime: task.startDateTime ? Timestamp.fromDate(task.startDateTime) : null,
     endDateTime: task.endDateTime ? Timestamp.fromDate(task.endDateTime) : null,
@@ -274,14 +299,33 @@ export async function createTask(uid: string, task: NewTask): Promise<string> {
     attachmentCount: 0,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-    completedAt: null,
+    completedAt: inComplete ? Timestamp.fromDate(new Date()) : null,
     version: 1,
   });
   return ref.id;
 }
 
-export function deleteTask(uid: string, id: string) {
-  return deleteDoc(doc(paths.tasks(uid), id));
+/**
+ * Brings the Project Flow a task belongs to up to date after the task changed. A
+ * failure is isolated: the screens derive flow state live from the tasks, and the
+ * next change refreshes the stored copy.
+ */
+async function syncFlow(uid: string, taskId: string) {
+  try {
+    await recomputeForTask(uid, taskId);
+  } catch (e) {
+    console.warn("Could not update the flow for task", taskId, e);
+  }
+}
+
+export async function deleteTask(uid: string, id: string) {
+  await deleteDoc(doc(paths.tasks(uid), id));
+  // A deleted task leaves its flow; the stage then counts the tasks it has.
+  try {
+    await unlinkTask(uid, id);
+  } catch (e) {
+    console.warn("Could not unlink deleted task from its flow", id, e);
+  }
 }
 
 /**
@@ -303,62 +347,142 @@ export function setSubtasks(uid: string, id: string, subtasks: Subtask[]) {
   return updateTaskFields(uid, id, { subtasks });
 }
 
-/**
- * Next date for a repeating task, matching the Flutter app's nextOccurrence so
- * both clients advance a series identically.
- */
-export function nextOccurrence(from: Date, recurrence: Recurrence): Date | null {
-  const d = new Date(from);
-  switch (recurrence) {
-    case "none":
-      return null;
-    case "daily":
-      d.setDate(d.getDate() + 1);
-      return d;
-    case "weekdays": {
-      do {
-        d.setDate(d.getDate() + 1);
-      } while (d.getDay() === 0 || d.getDay() === 6);
-      return d;
-    }
-    case "weekly":
-      d.setDate(d.getDate() + 7);
-      return d;
-    case "monthly":
-      d.setMonth(d.getMonth() + 1);
-      return d;
-    case "yearly":
-      d.setFullYear(d.getFullYear() + 1);
-      return d;
-  }
+export { nextOccurrence };
+
+/** Date values become Firestore Timestamps; everything else is written as is. */
+function toFirestore(fields: Record<string, unknown>): DocumentData {
+  return Object.fromEntries(
+    Object.entries(fields).map(([k, v]) => [k, v instanceof Date ? Timestamp.fromDate(v) : v]),
+  );
 }
 
-export async function setTaskCompleted(uid: string, task: Task, completed: boolean) {
-  await updateTaskFields(uid, task.id, {
-    completed,
-    completedAt: completed ? Timestamp.fromDate(new Date()) : null,
+async function listsOfBoard(uid: string, boardId: string): Promise<TaskList[]> {
+  const snap = await getDocs(query(paths.lists(uid), where("boardId", "==", boardId)));
+  return snap.docs.map((d) => mapList(d as Snap)).sort((x, y) => x.position - y.position);
+}
+
+/** A position that sorts before every card now in `listId`. */
+async function topPositionIn(uid: string, listId: string, exceptId?: string): Promise<number> {
+  const snap = await getDocs(query(paths.tasks(uid), where("listId", "==", listId)));
+  const positions = snap.docs
+    .filter((d) => d.id !== exceptId)
+    .map((d) => (typeof d.data().position === "number" ? (d.data().position as number) : 0));
+  return positionBetween(null, positions.length ? Math.min(...positions) : null);
+}
+
+/**
+ * Completes or re-opens a task. The one entry point the UI and drag-and-drop
+ * use, the same as the Flutter app's Repo.setTaskCompleted, so a task behaves
+ * the same on every client.
+ */
+export function setTaskCompleted(uid: string, task: Task, completed: boolean) {
+  return completed ? completeTask(uid, task) : reopenTask(uid, task);
+}
+
+/**
+ * Completes a task by MOVING it to its board's Complete list (same id, no copy),
+ * remembering where it came from. A repeating task also gets its next occurrence
+ * in the list it came from, with an id derived from the task and the occurrence,
+ * so completing the same occurrence twice (double tap, two devices) writes one
+ * document. One atomic batch, not a transaction, so it keeps working offline.
+ * The rules are in completion.ts and tested against the Flutter vectors.
+ */
+export async function completeTask(uid: string, task: Task, position?: number) {
+  const ref = doc(paths.tasks(uid), task.id);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new TaskGoneError();
+  const current = mapTask(snap as Snap);
+  if (current.completed) return; // already done: nothing to move, nothing to spawn
+
+  const boardLists = current.boardId ? await listsOfBoard(uid, current.boardId) : [];
+  const complete = boardLists.find(isCompleteList) ?? null;
+  const top = complete ? (position ?? (await topPositionIn(uid, complete.id, current.id))) : 0;
+
+  const plan = planCompletion(current, {
+    completeListId: complete?.id ?? null,
+    topPosition: top,
+    now: new Date(),
   });
 
-  // A repeating task spawns its next instance rather than just closing, the
-  // same as the Flutter app. Without this, completing it on the web would
-  // silently end the series.
-  if (completed && task.recurrence !== "none" && task.startDateTime) {
-    const next = nextOccurrence(task.startDateTime, task.recurrence);
-    if (next) {
-      const span = task.endDateTime ? +task.endDateTime - +task.startDateTime : null;
-      await createTask(uid, {
-        title: task.title,
-        description: task.description,
-        listId: task.listId,
-        boardId: task.boardId,
-        categoryId: task.categoryId,
-        position: task.position,
-        priority: task.priority,
-        startDateTime: next,
-        endDateTime: span === null ? null : new Date(+next + span),
-      });
-    }
+  const batch = writeBatch(db);
+  if (plan.next) {
+    const { reminders, ...overrides } = plan.next.overrides;
+    batch.set(doc(paths.tasks(uid), plan.next.id), {
+      ...snap.data(),
+      ...toFirestore(overrides),
+      reminders: (reminders as TaskReminder[]).map(reminderToJson),
+      hasSchedule: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
   }
+  batch.update(ref, {
+    ...toFirestore(plan.patch),
+    updatedAt: serverTimestamp(),
+    version: increment(1),
+  });
+  await batch.commit();
+  await syncFlow(uid, current.id);
+}
+
+/**
+ * Re-opens a completed task, putting it back where it came from (or where the
+ * user dropped it). A next occurrence spawned by completing it is removed again
+ * if nobody has touched it, so completing and un-completing leaves no duplicate.
+ */
+export async function reopenTask(
+  uid: string,
+  task: Task,
+  opts: { toListId?: string | null; position?: number } = {},
+) {
+  const ref = doc(paths.tasks(uid), task.id);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new TaskGoneError();
+  const current = mapTask(snap as Snap);
+  if (!current.completed) return;
+
+  let originStillExists = false;
+  if (current.completedFromListId) {
+    const origin = await getDoc(doc(paths.lists(uid), current.completedFromListId));
+    originStillExists = origin.exists() && !isCompleteList(mapList(origin as Snap));
+  }
+  let firstOrdinaryListId: string | null = null;
+  if (current.boardId) {
+    firstOrdinaryListId =
+      (await listsOfBoard(uid, current.boardId)).find((l) => !isCompleteList(l))?.id ?? null;
+  }
+
+  const target = chooseReopenList(current, {
+    toListId: opts.toListId,
+    originStillExists,
+    firstOrdinaryListId,
+  });
+  const top = target ? (opts.position ?? (await topPositionIn(uid, target, current.id))) : 0;
+
+  let spawned: Task | null = null;
+  if (current.spawnedNextTaskId) {
+    const spawnedSnap = await getDoc(doc(paths.tasks(uid), current.spawnedNextTaskId));
+    spawned = spawnedSnap.exists() ? mapTask(spawnedSnap as Snap) : null;
+  }
+
+  const plan = planReopen(current, {
+    toListId: opts.toListId,
+    originStillExists,
+    firstOrdinaryListId,
+    topPosition: top,
+    position: opts.position,
+    spawned,
+  });
+
+  const batch = writeBatch(db);
+  if (plan.deleteSpawnedId) batch.delete(doc(paths.tasks(uid), plan.deleteSpawnedId));
+  batch.update(ref, {
+    ...toFirestore(plan.patch),
+    updatedAt: serverTimestamp(),
+    version: increment(1),
+  });
+  await batch.commit();
+  await syncFlow(uid, current.id);
 }
 
 /** Moves a repeating task to its next occurrence without completing it. */
@@ -384,17 +508,116 @@ export async function addList(uid: string, list: Omit<TaskList, "id">) {
   return ref.id;
 }
 
-export function deleteList(uid: string, id: string) {
-  return deleteDoc(doc(paths.lists(uid), id));
+/**
+ * Deletes a list without stranding its cards: they move to the board's first
+ * remaining ordinary list, or back to the Inbox when there is none. The Complete
+ * list is where finished work goes, so it cannot be deleted.
+ */
+export async function deleteList(uid: string, id: string) {
+  const listRef = doc(paths.lists(uid), id);
+  const snap = await getDoc(listRef);
+  if (!snap.exists()) return;
+  const list = mapList(snap as Snap);
+  if (isCompleteList(list)) throw new Error("The Complete list cannot be deleted.");
+
+  const inList = await getDocs(query(paths.tasks(uid), where("listId", "==", id)));
+  const batch = writeBatch(db);
+  if (!inList.empty) {
+    const siblings = await listsOfBoard(uid, list.boardId);
+    const fallback = siblings.find((l) => l.id !== id && !isCompleteList(l)) ?? null;
+    for (const d of inList.docs) {
+      batch.update(d.ref, {
+        listId: fallback?.id ?? null,
+        ...(fallback ? {} : { boardId: null }),
+        updatedAt: serverTimestamp(),
+        version: increment(1),
+      });
+    }
+  }
+  batch.delete(listRef);
+  await batch.commit();
+}
+
+/** Moves a list one place left (-1) or right (+1) on its board. */
+export async function moveListBy(uid: string, listId: string, delta: number) {
+  const snap = await getDoc(doc(paths.lists(uid), listId));
+  if (!snap.exists()) return;
+  const list = mapList(snap as Snap);
+  const ordered = await listsOfBoard(uid, list.boardId);
+  const plan = planListMove(ordered, listId, delta);
+  if (!plan) return;
+
+  if (!plan.needsRebalance) {
+    await updateDoc(doc(paths.lists(uid), listId), {
+      position: plan.position,
+      updatedAt: serverTimestamp(),
+    });
+    return;
+  }
+  const batch = writeBatch(db);
+  const positions = rebalanced(plan.reordered.length);
+  plan.reordered.forEach((l, i) =>
+    batch.update(doc(paths.lists(uid), l.id), {
+      position: positions[i],
+      updatedAt: serverTimestamp(),
+    }),
+  );
+  await batch.commit();
 }
 
 export function renameList(uid: string, id: string, name: string) {
   return updateDoc(doc(paths.lists(uid), id), { name, updatedAt: serverTimestamp() });
 }
 
+/** Adds a board and its default lists (Inbox … Complete … Someday) in one atomic write. */
+function addBoardWithLists(
+  batch: ReturnType<typeof writeBatch>,
+  uid: string,
+  boardRef: ReturnType<typeof doc>,
+  board: Omit<Board, "id">,
+) {
+  batch.set(boardRef, { ...board, updatedAt: serverTimestamp() });
+  DEFAULT_LISTS.forEach((spec, i) => {
+    batch.set(doc(paths.lists(uid)), {
+      boardId: boardRef.id,
+      name: spec.name,
+      position: (i + 1) * 1000,
+      colorValue: spec.color,
+      isSystem: true,
+      ...(spec.kind ? { kind: spec.kind } : {}),
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
 export async function addBoard(uid: string, board: Omit<Board, "id">) {
-  const ref = await addDoc(paths.boards(uid), { ...board, updatedAt: serverTimestamp() });
+  const ref = doc(paths.boards(uid));
+  const batch = writeBatch(db);
+  addBoardWithLists(batch, uid, ref, board);
+  await batch.commit();
   return ref.id;
+}
+
+/**
+ * Deletes a board and tidies up after it. Its lists go with it; its tasks are
+ * kept and return to the Inbox rather than being deleted or left pointing at a
+ * board that is gone.
+ */
+export async function deleteBoard(uid: string, id: string) {
+  const boardLists = await getDocs(query(paths.lists(uid), where("boardId", "==", id)));
+  const boardTasks = await getDocs(query(paths.tasks(uid), where("boardId", "==", id)));
+  const batch = writeBatch(db);
+  for (const d of boardTasks.docs) {
+    batch.update(d.ref, {
+      boardId: null,
+      listId: null,
+      updatedAt: serverTimestamp(),
+      version: increment(1),
+    });
+  }
+  for (const d of boardLists.docs) batch.delete(d.ref);
+  batch.delete(doc(paths.boards(uid), id));
+  await batch.commit();
 }
 
 export async function addCategory(uid: string, category: Omit<Category, "id">) {
@@ -447,51 +670,96 @@ const DEFAULT_CATEGORIES: [string, number][] = [
   ["Other", 0xff6b7280],
 ];
 
-const LIST_COLORS = [0xff9ca3af, 0xff6c5ce7, 0xffe8a33d, 0xff3b82f6, 0xff30a46c, 0xffa78bfa];
-const LIST_NAMES = ["Inbox", "Todo", "In progress", "Waiting", "Done", "Someday"];
-
 /**
- * Creates the default board, lists and categories on first sign-in. Uses the
- * same `bootstrapped` flag as the Flutter app, so whichever client the user
- * opens first seeds the data and the other one leaves it alone.
+ * Creates the default board, lists and categories on first sign-in, and migrates
+ * an existing account to the current list layout. Uses the same `bootstrapped`
+ * and `listsVersion` flags as the Flutter app, so whichever client the user
+ * opens first seeds or migrates and the other leaves it alone. Safe on every launch.
  */
 export async function ensureBootstrap(uid: string): Promise<void> {
   const userRef = doc(db, "users", uid);
   const userSnap = await getDoc(userRef);
-  if (userSnap.exists() && userSnap.data().bootstrapped) return;
+  const data = userSnap.exists() ? userSnap.data() : {};
 
+  if (!data.bootstrapped) {
+    const batch = writeBatch(db);
+    const boardRef = doc(paths.boards(uid));
+    addBoardWithLists(batch, uid, boardRef, {
+      name: "Personal Board",
+      colorValue: 0xff6c5ce7,
+      position: 1000,
+      workspace: "Personal workspace",
+    });
+
+    DEFAULT_CATEGORIES.forEach(([name, colorValue], i) => {
+      batch.set(doc(paths.categories(uid)), {
+        name,
+        colorValue,
+        position: (i + 1) * 1000,
+        iconCode: 0,
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    batch.set(
+      userRef,
+      { bootstrapped: true, listsVersion: LISTS_VERSION, createdAt: serverTimestamp() },
+      { merge: true },
+    );
+    await batch.commit();
+    return;
+  }
+
+  if ((typeof data.listsVersion === "number" ? data.listsVersion : 1) < LISTS_VERSION) {
+    await migrateLists(uid);
+  }
+}
+
+/**
+ * Gives every board a Complete list. A system list called "Done" BECOMES the
+ * Complete list (renamed and marked, keeping every task in it); a board with no
+ * Done gets a new one whose id is derived from the board, so two devices running
+ * this at once write the same document. Safe to run twice. Mirrors the Flutter
+ * app's migrateLists.
+ */
+export async function migrateLists(uid: string): Promise<void> {
+  const boards = await getDocs(paths.boards(uid));
+  const lists = await getDocs(paths.lists(uid));
   const batch = writeBatch(db);
-  const boardRef = doc(paths.boards(uid));
-  batch.set(boardRef, {
-    name: "Personal Board",
-    colorValue: 0xff6c5ce7,
-    position: 1000,
-    workspace: "Personal workspace",
-    updatedAt: serverTimestamp(),
-  });
 
-  LIST_NAMES.forEach((name, i) => {
-    batch.set(doc(paths.lists(uid)), {
-      boardId: boardRef.id,
-      name,
-      position: (i + 1) * 1000,
-      colorValue: LIST_COLORS[i],
-      isSystem: true,
-      updatedAt: serverTimestamp(),
-    });
-  });
+  for (const board of boards.docs) {
+    const boardLists = lists.docs.filter((d) => d.data().boardId === board.id);
+    if (boardLists.some((d) => d.data().kind === COMPLETE_KIND)) continue;
 
-  DEFAULT_CATEGORIES.forEach(([name, colorValue], i) => {
-    batch.set(doc(paths.categories(uid)), {
-      name,
-      colorValue,
-      position: (i + 1) * 1000,
-      iconCode: 0,
-      updatedAt: serverTimestamp(),
-    });
-  });
+    const done = boardLists.find(
+      (d) =>
+        d.data().isSystem === true &&
+        String(d.data().name ?? "").trim().toLowerCase() === "done",
+    );
+    if (done) {
+      batch.update(done.ref, {
+        kind: COMPLETE_KIND,
+        name: "Complete",
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      const last = boardLists.reduce(
+        (m, d) => Math.max(m, typeof d.data().position === "number" ? d.data().position : 0),
+        0,
+      );
+      batch.set(doc(paths.lists(uid), `complete-${board.id}`), {
+        boardId: board.id,
+        name: "Complete",
+        position: last + 1000,
+        colorValue: DEFAULT_LISTS[4].color,
+        isSystem: true,
+        kind: COMPLETE_KIND,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
 
-  batch.set(userRef, { bootstrapped: true, createdAt: serverTimestamp() }, { merge: true });
+  batch.set(doc(db, "users", uid), { listsVersion: LISTS_VERSION }, { merge: true });
   await batch.commit();
 }
 

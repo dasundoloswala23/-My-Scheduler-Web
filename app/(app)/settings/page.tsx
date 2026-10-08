@@ -1,9 +1,11 @@
 "use client";
 
-import { LogOut } from "lucide-react";
+import { LogOut, Trash2 } from "lucide-react";
 import Link from "next/link";
+import { useState } from "react";
 import { toast } from "sonner";
 
+import { deleteAccount, reauthMethod } from "@/lib/account";
 import { useAuth } from "@/lib/auth-context";
 import { describeStatus, useBrowserNotifications } from "@/lib/browser-notifications";
 import { HOLIDAY_COUNTRIES } from "@/lib/holidays";
@@ -243,6 +245,19 @@ export default function SettingsPage() {
           </div>
         </Section>
 
+        <Section title="Legal">
+          <div className="card divide-y divide-divider">
+            <Link href="/privacy" className="block px-5 py-3.5 text-sm font-semibold hover:bg-[var(--hover)]">
+              Privacy Policy
+            </Link>
+            <Link href="/terms" className="block px-5 py-3.5 text-sm font-semibold hover:bg-[var(--hover)]">
+              Terms of Service
+            </Link>
+          </div>
+        </Section>
+
+        <DeleteAccount />
+
         <button
           type="button"
           onClick={signOut}
@@ -252,6 +267,109 @@ export default function SettingsPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Permanently deletes the account and everything in it. Asks for confirmation
+ * and re-authentication first, since Firebase refuses to delete an old session.
+ */
+function DeleteAccount() {
+  const { user } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!user) return null;
+  const method = reauthMethod(user);
+
+  async function confirm() {
+    if (!user || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await deleteAccount(user, password);
+      // Deleting the user signs them out, which returns the app to the login page.
+    } catch (e) {
+      setBusy(false);
+      const code = (e as { code?: string }).code ?? "";
+      setError(
+        code === "auth/wrong-password" || code === "auth/invalid-credential"
+          ? "That password is not correct."
+          : e instanceof Error && !code
+            ? e.message
+            : "Could not delete the account. Please try again.",
+      );
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="card mb-3 flex w-full items-center gap-3 px-5 py-4 text-left text-sm font-semibold text-danger"
+      >
+        <Trash2 className="h-4 w-4" />
+        <span>
+          Delete account
+          <span className="block text-[12px] font-normal text-muted">
+            Permanently removes your tasks, files and sign-in
+          </span>
+        </span>
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Delete your account"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl bg-surface p-5">
+            <h2 className="text-lg font-bold">Delete your account?</h2>
+            <p className="mt-2 text-sm text-muted">
+              This permanently deletes your tasks, boards, notes, flows, attachments and sign-in. It
+              cannot be undone.
+            </p>
+            {method === "password" && (
+              <input
+                type="password"
+                autoFocus
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && confirm()}
+                placeholder="Your password"
+                aria-label="Your password"
+                className="mt-3 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+            )}
+            {method === "google" && (
+              <p className="mt-3 text-[13px] text-muted">You will be asked to confirm with Google.</p>
+            )}
+            {error && <p className="mt-3 text-[13px] text-danger">{error}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                disabled={busy}
+                className="rounded-lg px-4 py-2 text-sm font-semibold text-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirm}
+                disabled={busy || (method === "password" && !password)}
+                className="rounded-lg bg-danger px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {busy ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

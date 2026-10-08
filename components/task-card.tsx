@@ -18,11 +18,14 @@ import {
   Link as LinkIcon,
   MoreHorizontal,
   Paperclip,
+  Repeat,
+  Rocket,
   Square,
 } from "lucide-react";
 import { useState } from "react";
 
 import { useAuth } from "@/lib/auth-context";
+import { useTaskFlowBadges } from "@/lib/flow-hooks";
 import { useCategoryMap } from "@/lib/hooks";
 import { firstLinkIn } from "@/lib/link-preview";
 import { usePreferences } from "@/lib/preferences";
@@ -35,11 +38,21 @@ function tint(color: string): string {
   return `color-mix(in srgb, ${color} var(--tint-strength), transparent)`;
 }
 
+const RECURRENCE_LABEL: Record<Task["recurrence"], string> = {
+  none: "Does not repeat",
+  daily: "Daily",
+  weekdays: "Weekdays",
+  weekly: "Weekly",
+  monthly: "Monthly",
+  yearly: "Yearly",
+};
+
 export function TaskCardBody({ task, onMenu }: { task: Task; onMenu?: () => void }) {
   const categories = useCategoryMap();
   const { user } = useAuth();
   const { preferences } = usePreferences();
   const [expanded, setExpanded] = useState(false);
+  const flowBadge = useTaskFlowBadges()[task.id];
 
   const category = task.categoryId ? categories[task.categoryId] : undefined;
   const done = task.subtasks.filter((s) => s.done).length;
@@ -77,6 +90,8 @@ export function TaskCardBody({ task, onMenu }: { task: Task; onMenu?: () => void
     task.subtasks.length > 0 ||
     task.attachmentCount > 0 ||
     task.attachments.length > 0 ||
+    task.recurrence !== "none" ||
+    !!flowBadge ||
     reminderCount > 0;
 
   return (
@@ -178,6 +193,18 @@ export function TaskCardBody({ task, onMenu }: { task: Task; onMenu?: () => void
                 {task.endDateTime
                   ? `${format(task.startDateTime, "h:mm a")} – ${format(task.endDateTime, "h:mm a")}`
                   : format(task.startDateTime, "h:mm a")}
+              </span>
+            )}
+            {task.recurrence !== "none" && (
+              <span className="flex items-center gap-1">
+                <Repeat className="h-3 w-3" />
+                {RECURRENCE_LABEL[task.recurrence]}
+              </span>
+            )}
+            {flowBadge && (
+              <span className="flex items-center gap-1 text-primary">
+                <Rocket className="h-3 w-3" />
+                Flow {flowBadge.done}/{flowBadge.total}
               </span>
             )}
             {reminderCount > 0 && (

@@ -1,6 +1,7 @@
 "use client";
 
 import { BarChart3 } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -138,6 +139,18 @@ export default function LoginPage() {
           <GoogleMark />
           Continue with Google
         </button>
+
+        <p className="mt-6 text-center text-[12px] text-muted">
+          By continuing you agree to the{" "}
+          <Link href="/terms" className="font-semibold hover:text-primary">
+            Terms
+          </Link>{" "}
+          and{" "}
+          <Link href="/privacy" className="font-semibold hover:text-primary">
+            Privacy Policy
+          </Link>
+          .
+        </p>
 
         <p className="mt-6 text-center text-xs text-muted">
           Sign in with Apple is available in the iOS app.

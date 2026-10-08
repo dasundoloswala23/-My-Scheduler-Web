@@ -18,13 +18,21 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { ListFilter, Pencil, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, ListFilter, Pencil, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAuth } from "@/lib/auth-context";
 import { useCategories, useLists, useTasks, tasksForList } from "@/lib/hooks";
 import { needsRebalance, positionBetween, rebalanced } from "@/lib/position";
-import { addList, appendPosition, createTask, moveTask, renameList } from "@/lib/repo";
+import {
+  addList,
+  appendPosition,
+  createTask,
+  deleteList,
+  moveListBy,
+  moveTask,
+  renameList,
+} from "@/lib/repo";
 import { argbToCss, type Task, type TaskList } from "@/lib/types";
 import { useMove } from "@/lib/use-move";
 
@@ -74,10 +82,11 @@ export function Board({ boardId }: { boardId: string }) {
     const overData = over.data.current as { type?: string; task?: Task; listId?: string } | undefined;
     const targetListId =
       overData?.type === "task" ? overData.task!.listId : (overData?.listId ?? null);
+    const dropOnTop = overData?.type === "top";
     if (!targetListId) return;
 
     const siblings = tasksForList(tasks, targetListId).filter((t) => t.id !== task.id);
-    let index = siblings.length;
+    let index = dropOnTop ? 0 : siblings.length;
     if (overData?.type === "task") {
       const overIndex = siblings.findIndex((t) => t.id === overData.task!.id);
       if (overIndex >= 0) {
@@ -142,6 +151,7 @@ export function Board({ boardId }: { boardId: string }) {
               position: appendPosition(lists),
               colorValue: 0xff9ca3af,
               isSystem: false,
+              kind: null,
             });
           }}
           className="flex items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[13px] font-semibold hover:border-primary"
@@ -166,10 +176,13 @@ export function Board({ boardId }: { boardId: string }) {
         }}
       >
         <div className="flex h-full gap-3.5 overflow-x-auto px-5 pb-6">
-          {lists.map((list) => (
+          {lists.map((list, index) => (
             <Column
               key={list.id}
               list={list}
+              index={index}
+              count={lists.length}
+              dragging={activeTask !== null}
               tasks={tasksForList(tasks, list.id)}
               onOpenTask={setOpenTask}
               onMenuTask={setMenuTask}
@@ -198,13 +211,53 @@ export function Board({ boardId }: { boardId: string }) {
   );
 }
 
+/**
+ * A labelled drop target above the first card ("top") or below the last ("end").
+ * Collapsed to a thin strip until a card is being dragged, then opens up and says
+ * what it is, so there is always an obvious place to drop a card first or last.
+ */
+function DropZone({
+  id,
+  listId,
+  where,
+  open,
+}: {
+  id: string;
+  listId: string;
+  where: "top" | "end";
+  open: boolean;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id, data: { type: where, listId } });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`my-1 flex items-center justify-center rounded-xl border text-[12.5px] font-semibold transition-all duration-150 ${
+        isOver
+          ? "h-14 border-2 border-primary bg-primary-soft text-primary"
+          : open
+            ? "h-10 border-line text-muted"
+            : "h-2 border-transparent"
+      }`}
+    >
+      {open || isOver ? (isOver ? "Drop task here" : where === "top" ? "Drop task here" : "Drop at the end") : null}
+    </div>
+  );
+}
+
 function Column({
   list,
+  index,
+  count,
+  dragging,
   tasks,
   onOpenTask,
   onMenuTask,
 }: {
   list: TaskList;
+  index: number;
+  count: number;
+  /** True while any card is being dragged; the drop zones open up for it. */
+  dragging: boolean;
   tasks: Task[];
   onOpenTask: (t: Task) => void;
   onMenuTask: (t: Task) => void;
@@ -282,6 +335,28 @@ function Column({
           {tasks.length}
         </span>
         {!editingName && (
+          <span className="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="Move list left"
+              disabled={index === 0}
+              onClick={() => user && moveListBy(user.uid, list.id, -1)}
+              className="text-muted hover:text-ink disabled:opacity-30"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Move list right"
+              disabled={index === count - 1}
+              onClick={() => user && moveListBy(user.uid, list.id, 1)}
+              className="text-muted hover:text-ink disabled:opacity-30"
+            >
+              <ArrowRight className="h-3.5 w-3.5" />
+            </button>
+          </span>
+        )}
+        {!editingName && (
           <button
             type="button"
             aria-label="Rename list"
@@ -289,15 +364,30 @@ function Column({
               setNameDraft(list.name);
               setEditingName(true);
             }}
-            className="ml-auto text-muted hover:text-ink"
+            className="text-muted hover:text-ink"
           >
             <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {!editingName && !list.isSystem && (
+          <button
+            type="button"
+            aria-label="Delete list"
+            onClick={() => {
+              if (user && window.confirm(`Delete "${list.name}"? Its cards move to another list.`)) {
+                deleteList(user.uid, list.id);
+              }
+            }}
+            className="text-[11px] font-semibold text-muted hover:text-danger"
+          >
+            Delete
           </button>
         )}
       </header>
 
       {/* The whole column is the drop target; an empty list still has height. */}
       <div ref={setNodeRef} className="min-h-[120px] flex-1 overflow-y-auto px-0.5">
+        <DropZone id={`top:${list.id}`} listId={list.id} where="top" open={dragging} />
         <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
           {tasks.map((task) => (
             <SortableTaskCard
@@ -308,6 +398,7 @@ function Column({
             />
           ))}
         </SortableContext>
+        <DropZone id={`end:${list.id}`} listId={list.id} where="end" open={dragging} />
       </div>
 
       {composing ? (

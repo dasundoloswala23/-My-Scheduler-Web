@@ -9,6 +9,10 @@ import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
 import {
   HOLIDAY_CATEGORIES,
+  HOLIDAY_GROUPS,
+  groupIsOn,
+  toggleGroup,
+  type HolidayGroupId,
   HOLIDAY_COUNTRIES,
   holidayCountry,
   holidaysForYears,
@@ -55,11 +59,8 @@ export default function HolidaysPage() {
     void save({ holidayCountries: [...next].sort() });
   }
 
-  function toggleCategory(id: string, on: boolean) {
-    const next = new Set(categories);
-    if (on) next.add(id);
-    else next.delete(id);
-    void save({ holidayCategories: [...next] });
+  function toggleCategory(id: HolidayGroupId, on: boolean) {
+    void save({ holidayCategories: toggleGroup(id, categories, on) });
   }
 
   async function addOwn() {
@@ -150,18 +151,18 @@ export default function HolidaysPage() {
           <section>
             <h2 className="eyebrow mb-2">Holiday types</h2>
             <div className="card divide-y divide-divider">
-              {HOLIDAY_CATEGORIES.map((c) => (
+              {HOLIDAY_GROUPS.map((c) => (
                 <label
                   key={c.id}
                   className="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-[var(--hover)]"
                 >
                   <input
                     type="checkbox"
-                    checked={categories.has(c.id)}
+                    checked={groupIsOn(c.id, categories)}
                     onChange={(e) => toggleCategory(c.id, e.target.checked)}
                     className="h-4 w-4 accent-[var(--primary)]"
                   />
-                  <span className="text-sm font-semibold">{c.plural}</span>
+                  <span className="text-sm font-semibold">{c.label}</span>
                 </label>
               ))}
             </div>
