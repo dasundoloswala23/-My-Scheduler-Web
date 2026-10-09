@@ -389,12 +389,24 @@ export function setTaskCompleted(uid: string, task: Task, completed: boolean) {
  */
 export async function completeTask(uid: string, task: Task, position?: number) {
   const ref = doc(paths.tasks(uid), task.id);
-  const snap = await getDoc(ref);
+  // Read the task and its board's lists at the same time: they are independent,
+  // and each is a network round trip, which is what makes ticking a card feel slow.
+  const [snap, guessedLists] = await Promise.all([
+    getDoc(ref),
+    task.boardId ? listsOfBoard(uid, task.boardId) : Promise.resolve<TaskList[]>([]),
+  ]);
   if (!snap.exists()) throw new TaskGoneError();
   const current = mapTask(snap as Snap);
   if (current.completed) return; // already done: nothing to move, nothing to spawn
 
-  const boardLists = current.boardId ? await listsOfBoard(uid, current.boardId) : [];
+  // The task's board could have changed since the card was drawn; if so the lists
+  // read above are the wrong board's.
+  const boardLists =
+    current.boardId === task.boardId
+      ? guessedLists
+      : current.boardId
+        ? await listsOfBoard(uid, current.boardId)
+        : [];
   const complete = boardLists.find(isCompleteList) ?? null;
   const top = complete ? (position ?? (await topPositionIn(uid, complete.id, current.id))) : 0;
 
